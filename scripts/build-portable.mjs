@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { chmod, copyFile, mkdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -63,7 +63,8 @@ run(process.execPath, [
 run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'scripts', 'set-exe-icon.ps1'), '-Exe', executable, '-Icon', join(root, 'assets', 'icon.ico')])
 await copyFile(join(root, 'scripts', 'portable-start.bat'), join(outputDir, 'start.bat'))
 await copyFile(join(root, 'THIRD_PARTY_NOTICES.md'), join(outputDir, 'THIRD_PARTY_NOTICES.md'))
-await writeFile(join(outputDir, 'README.txt'), `SubToAPI
+const version = await archiveVersion()
+await writeFile(join(outputDir, 'README.txt'), `SubToAPI ${version}
 ========
 
 Запуск: start.bat
@@ -75,4 +76,36 @@ Node.js устанавливать не нужно. Эту папку можно
 создаются в папке settings рядом с программой. Эту папку не нужно отправлять
 вместе с программой: в ней ключи входа.
 `, 'utf8')
+const archive = await zipPortable(version)
+await writeFile(join(root, 'release', 'RELEASE_NOTES.txt'), `Портативная сборка Windows ${version}.
+
+Распакуйте архив и запустите start.bat. Node.js устанавливать не нужно.
+Папка settings в архив не входит: токены создаются локально при первом запуске.
+`, 'utf8')
 console.log(`Готово: ${outputDir}`)
+console.log(`Архив: ${archive}`)
+
+async function archiveVersion() {
+  const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+  const tagged = process.env.SUB_TO_API_VERSION?.trim().replace(/^v/, '')
+  if (tagged && tagged !== pkg.version) {
+    throw new Error(`Тег v${tagged} не совпадает с версией package.json (${pkg.version})`)
+  }
+  if (!/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(pkg.version)) throw new Error(`Некорректная версия: ${pkg.version}`)
+  return pkg.version
+}
+
+async function zipPortable(version) {
+  const stageRoot = join(root, 'release', '.stage')
+  const stage = join(stageRoot, 'SubToAPI')
+  const archive = join(root, 'release', `SubToAPI-${version}-win-x64.zip`)
+  await rm(stageRoot, { recursive: true, force: true })
+  await rm(archive, { force: true })
+  await mkdir(stage, { recursive: true })
+  for (const name of ['sub-to-api.exe', 'start.bat', 'README.txt', 'THIRD_PARTY_NOTICES.md']) {
+    await copyFile(join(outputDir, name), join(stage, name))
+  }
+  run('tar.exe', ['-a', '-c', '-f', archive, '-C', stageRoot, 'SubToAPI'])
+  await rm(stageRoot, { recursive: true, force: true })
+  return archive
+}

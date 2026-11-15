@@ -1,8 +1,4 @@
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const table = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../data/prices.json'), 'utf8'))
+import table from '../data/prices.json' with { type: 'json' }
 const models = table.models
   .map((model) => ({ ...model, key: normalize(model.id) }))
   .sort((a, b) => b.key.length - a.key.length)

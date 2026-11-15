@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, openSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isSea } from 'node:sea'
 import { hostFor, normalizeExposure, normalizeSettingsKeyScope, settingsExposureOf, widerExposure } from './network.js'
 import { clearRuntime, writeRuntime } from './runtime.js'
 import { APP_DIR, Store } from './storage/store.js'
@@ -89,7 +90,7 @@ function listen(server, port, host) {
 }
 
 function startTray(port) {
-  if (process.env.SUB_TO_API_NO_TRAY === '1' || process.platform !== 'win32') return undefined
+  if (process.env.SUB_TO_API_NO_TRAY === '1' || process.platform !== 'win32' || isSea()) return undefined
   const script = join(dirname(fileURLToPath(import.meta.url)), '../scripts/tray.ps1')
   if (!existsSync(script)) return undefined
   const logDir = APP_DIR

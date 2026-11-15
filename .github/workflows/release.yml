@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Check
+        run: npm run check
+
+      - name: Package
+        run: npm run package
+        env:
+          SUB_TO_API_VERSION: ${{ github.ref_name }}
+
+      - name: Publish archive
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $zip = Get-ChildItem release\SubToAPI-*-win-x64.zip | Select-Object -First 1
+          if (-not $zip) { throw "Release archive was not created" }
+          gh release create $env:RELEASE_TAG $zip.FullName --title $env:RELEASE_TAG --notes-file release\RELEASE_NOTES.txt

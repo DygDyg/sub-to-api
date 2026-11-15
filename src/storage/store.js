@@ -4,9 +4,14 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
+import { isSea } from 'node:sea'
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-export const APP_DIR = process.env.SUB_TO_API_HOME || join(root, 'settings')
+function applicationRoot() {
+  if (isSea()) return dirname(process.execPath)
+  return join(dirname(fileURLToPath(import.meta.url)), '..')
+}
+
+export const APP_DIR = process.env.SUB_TO_API_HOME || join(applicationRoot(), 'settings')
 export const STORE_PATH = join(APP_DIR, 'state.json')
 export const LAST_REQUEST_PATH = join(APP_DIR, 'last-request.txt')
 const LEGACY_STORE = join(homedir(), '.sub-to-api', 'state.json')
