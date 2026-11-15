@@ -256,6 +256,40 @@ test('bad request is not retried on another pool model', async () => {
   assert.deepEqual(seen, ['a'])
 })
 
+test('provider 400 fails over to next pool model and cools the rejecting one', async () => {
+  const seen = []
+  const claude = new BaseProvider('claude', 'Claude')
+  claude.stream = async function* (request) {
+    seen.push(request.model)
+    if (request.model === 'broken') yield { type: 'error', text: 'Claude: HTTP 400 (invalid_request_error)', status: 400, code: 'invalid_request_error' }
+    else yield { type: 'text', text: request.model }
+  }
+  const service = new GatewayService({
+    read: async () => ({ pools: [{ id: 'p', strategy: 'first-available', members: ['claude/broken', 'claude/ok'] }], settings: {} }),
+    update: async () => {},
+  }, new ProviderRegistry([claude]))
+  const run = async () => {
+    const out = []
+    for await (const event of service.stream({ model: 'pool/p', messages: [{ role: 'user', content: 'hi' }] })) out.push(event)
+    return out
+  }
+  assert.equal((await run()).find((event) => event.type === 'text')?.text, 'ok')
+  assert.equal((await run()).find((event) => event.type === 'text')?.text, 'ok')
+  assert.deepEqual(seen, ['broken', 'ok', 'ok'])
+})
+
+test('provider 400 on every pool model does not cool any of them', async () => {
+  const seen = []
+  const claude = new BaseProvider('claude', 'Claude')
+  claude.stream = async function* (request) { seen.push(request.model); yield { type: 'error', text: 'bad', status: 400, code: 'invalid_request_error' } }
+  const service = new GatewayService({
+    read: async () => ({ pools: [{ id: 'p', strategy: 'first-available', members: ['claude/a', 'claude/b'] }], settings: {} }),
+    update: async () => {},
+  }, new ProviderRegistry([claude]))
+  for (let i = 0; i < 2; i++) for await (const event of service.stream({ model: 'pool/p', messages: [{ role: 'user', content: 'hi' }] })) void event
+  assert.deepEqual(seen, ['a', 'b', 'a', 'b'])
+})
+
 test('model tiers POST can also pick the classifier model', async () => {
   let state = { settings: { complexity: { heuristic: { enabled: true, mediumAt: 1, heavyAt: 3 } } } }
   const service = new GatewayService({
@@ -295,6 +329,7 @@ test('model tiers are readable with the api key and writable with the settings k
     assert.equal(body.models[0].id, 'grok/mini')
     assert.equal(body.models[0].tierSet, false)
     assert.match(body.instructions, /POST \{BASE\}\/api\/model-tiers/)
+    assert.match(body.instructions, /grok-4\.7-build-fast должен иметь тот же medium/)
     const bad = await fetch(`${base}/api/model-tiers`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-settings-key': 'secret-settings' }, body: JSON.stringify({ tiers: { 'grok/mini': 'ultra' } }) })
     assert.equal(bad.status, 400)
     const saved = await fetch(`${base}/api/model-tiers`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-settings-key': 'secret-settings' }, body: JSON.stringify({ tiers: { 'grok/mini': 'light' } }) })

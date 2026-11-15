@@ -25,7 +25,9 @@ async function responseError(response, label) {
   try { payload = await response.json() } catch {}
   const code = typeof payload?.error === 'string' ? payload.error : payload?.error?.type
   const safeCode = typeof code === 'string' && /^[a-z_]{1,64}$/.test(code) ? code : response.status === 429 ? 'rate_limit' : 'provider_error'
-  return failure(`${label}: HTTP ${response.status} (${safeCode})`, response.status, safeCode)
+  // API errors (not token endpoints) carry a human-readable reason, e.g. why a model rejects the request.
+  const detail = label === 'Claude' && typeof payload?.error?.message === 'string' ? `: ${payload.error.message.replace(/\s+/g, ' ').slice(0, 300)}` : ''
+  return failure(`${label}: HTTP ${response.status} (${safeCode})${detail}`, response.status, safeCode)
 }
 function headers(session) {
   return { authorization: `Bearer ${session.accessToken}`, 'anthropic-version': '2023-06-01', 'anthropic-beta': BETA, 'user-agent': `claude-cli/${CLI_VERSION} (external, cli)`, 'x-app': 'cli', 'anthropic-dangerous-direct-browser-access': 'true', accept: 'application/json' }

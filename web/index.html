@@ -96,6 +96,9 @@
     .stats-chart { width: 100%; height: auto; display: block; }
     .stats-share { display: flex; height: .65rem; border-radius: 4px; overflow: hidden; background: var(--bs-secondary-bg); }
     .stats-share span { display: block; min-width: 2px; height: 100%; }
+    .stats-io-row { display: grid; grid-template-columns: minmax(8rem, 14rem) 1fr auto; gap: .75rem; align-items: center; }
+    .stats-io-bar { display: flex; height: .65rem; border-radius: 4px; overflow: hidden; background: var(--bs-secondary-bg); }
+    .stats-io-bar span { display: block; min-width: 2px; height: 100%; }
     .stats-legend { display: flex; flex-wrap: wrap; gap: .35rem .75rem; }
     .stats-swatch { width: .7rem; height: .7rem; border-radius: 2px; display: inline-block; }
     .form-switch.switch-end { min-height: 0; padding-left: 0; }
@@ -181,6 +184,57 @@
                 </div>
               </div>
             </form>
+          </dialog>
+          <dialog id="custom-dialog" class="p-4">
+            <div class="vstack gap-3">
+              <div>
+                <h2 class="h5 mb-1">API-провайдер</h2>
+                <p class="text-body-secondary small mb-0">Любой сервис с OpenAI-совместимым <code>/v1/chat/completions</code> или Anthropic-совместимым <code>/v1/messages</code>: OpenAI, OpenRouter, DeepSeek, Groq, Ollama. Модели доступны как <code>id/модель</code>.</p>
+              </div>
+            <div id="custom-form" class="vstack gap-3">
+              <div class="row g-3">
+                <div class="col-md-4">
+                  <label class="form-label" for="custom-label">Название</label>
+                  <input id="custom-label" class="form-control" placeholder="OpenAI">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label" for="custom-id">id</label>
+                  <input id="custom-id" class="form-control" placeholder="openai" spellcheck="false" autocomplete="off">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label" for="custom-protocol">Протокол</label>
+                  <select id="custom-protocol" class="form-select">
+                    <option value="openai">OpenAI (/chat/completions)</option>
+                    <option value="anthropic">Anthropic (/messages)</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label class="form-label" for="custom-base">Base URL</label>
+                <input id="custom-base" class="form-control" placeholder="https://api.openai.com/v1" spellcheck="false" autocomplete="off">
+              </div>
+              <div>
+                <label class="form-label" for="custom-key">API key</label>
+                <input id="custom-key" class="form-control" type="password" autocomplete="off" spellcheck="false">
+              </div>
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <label class="form-label" for="custom-models">Модели вручную</label>
+                  <textarea id="custom-models" class="form-control" rows="3" placeholder="по одной в строке, если /models недоступен"></textarea>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="custom-headers">Доп. заголовки, JSON</label>
+                  <textarea id="custom-headers" class="form-control" rows="3" placeholder='{"HTTP-Referer": "https://example"}'></textarea>
+                </div>
+              </div>
+              <div class="d-flex gap-2 justify-content-end">
+                <button type="button" id="custom-cancel" class="btn btn-outline-secondary">Отмена</button>
+                <button type="button" id="custom-test" class="btn btn-outline-secondary">Проверить</button>
+                <button type="button" id="custom-save" class="btn btn-primary">Сохранить</button>
+              </div>
+              <p id="custom-status" class="small mb-0"></p>
+            </div>
+            </div>
           </dialog>
         </section>
 
@@ -334,63 +388,6 @@
                     <summary class="small text-body-secondary">Прокси отдельно для каждого провайдера</summary>
                     <div id="provider-proxies" class="vstack gap-2 mt-2"></div>
                   </details>
-                </div>
-              </article>
-            </div>
-            <div class="col-12">
-              <article class="card shadow-sm">
-                <div class="card-body vstack gap-3">
-                  <div class="d-flex justify-content-between align-items-center gap-3">
-                    <div>
-                      <h2 class="h5 mb-1">Свои API-провайдеры</h2>
-                      <p class="text-body-secondary small mb-0">Любой сервис с OpenAI-совместимым <code>/v1/chat/completions</code> или Anthropic-совместимым <code>/v1/messages</code>: OpenRouter, DeepSeek, Groq, Ollama, свой прокси. Модели доступны как <code>id/модель</code>.</p>
-                    </div>
-                    <button type="button" id="custom-add" class="btn btn-outline-secondary btn-sm">Добавить</button>
-                  </div>
-                  <div id="custom-providers" class="vstack gap-2"></div>
-                  <div id="custom-form" hidden class="border rounded p-3 vstack gap-3">
-                    <div class="row g-3">
-                      <div class="col-md-4">
-                        <label class="form-label" for="custom-label">Название</label>
-                        <input id="custom-label" class="form-control" placeholder="OpenRouter">
-                      </div>
-                      <div class="col-md-4">
-                        <label class="form-label" for="custom-id">id</label>
-                        <input id="custom-id" class="form-control" placeholder="openrouter" pattern="[a-z0-9][a-z0-9_-]{1,31}" required spellcheck="false" autocomplete="off">
-                      </div>
-                      <div class="col-md-4">
-                        <label class="form-label" for="custom-protocol">Протокол</label>
-                        <select id="custom-protocol" class="form-select">
-                          <option value="openai">OpenAI (/chat/completions)</option>
-                          <option value="anthropic">Anthropic (/messages)</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div>
-                      <label class="form-label" for="custom-base">Base URL</label>
-                      <input id="custom-base" class="form-control" placeholder="https://openrouter.ai/api/v1" spellcheck="false" autocomplete="off">
-                    </div>
-                    <div>
-                      <label class="form-label" for="custom-key">API key</label>
-                      <input id="custom-key" class="form-control" type="password" autocomplete="off" spellcheck="false">
-                    </div>
-                    <div class="row g-3">
-                      <div class="col-md-6">
-                        <label class="form-label" for="custom-models">Модели вручную</label>
-                        <textarea id="custom-models" class="form-control" rows="3" placeholder="по одной в строке, если /models недоступен"></textarea>
-                      </div>
-                      <div class="col-md-6">
-                        <label class="form-label" for="custom-headers">Доп. заголовки, JSON</label>
-                        <textarea id="custom-headers" class="form-control" rows="3" placeholder='{"HTTP-Referer": "https://example"}'></textarea>
-                      </div>
-                    </div>
-                    <div class="d-flex gap-2 justify-content-end">
-                      <button type="button" id="custom-cancel" class="btn btn-outline-secondary">Отмена</button>
-                      <button type="button" id="custom-test" class="btn btn-outline-secondary">Проверить</button>
-                      <button type="button" id="custom-save" class="btn btn-primary">Сохранить</button>
-                    </div>
-                    <p id="custom-status" class="small mb-0"></p>
-                  </div>
                 </div>
               </article>
             </div>

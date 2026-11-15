@@ -618,6 +618,8 @@ export class GatewayService {
       return
     }
     const pool = request.model.startsWith('pool/')
+    // модели, отклонившие запрос с 400: остывают, только если другая модель его приняла
+    const rejected = []
     for (let index = 0; index < routes.length; index++) {
       const route = routes[index]
       if (pool) request.routedModel = route.publicModel
@@ -655,10 +657,13 @@ export class GatewayService {
         await this.#record(id, request, started, route, status, error, usage, answer)
       }
       if (!failure) {
+        for (const model of rejected) this.poolCooldown.set(model, Date.now() + POOL_COOLDOWN_MS)
         yield* held
         return
       }
-      const retry = pool && !visible && index < routes.length - 1 && !request.signal?.aborted && failoverAllowed(failure)
+      const rejectedUpstream = upstreamRejected(failure)
+      if (pool && rejectedUpstream) rejected.push(route.publicModel)
+      const retry = pool && !visible && index < routes.length - 1 && !request.signal?.aborted && (failoverAllowed(failure) || rejectedUpstream)
       if (pool && failoverAllowed(failure)) {
         const quota = quotaFailure(failure)
         this.poolCooldown.set(route.publicModel, Date.now() + (quota ? QUOTA_COOLDOWN_MS : POOL_COOLDOWN_MS))
@@ -746,6 +751,14 @@ function failoverAllowed(failure) {
   if (failure.status === 499 || failure.code === 'aborted') return false
   if (['invalid_request', 'context_length_exceeded'].includes(failure.code)) return false
   return ![400, 413, 422].includes(failure.status)
+}
+
+/**
+ * 400 от самого провайдера (не наша проверка запроса): часто значит, что модель недоступна
+ * на подписке или не принимает параметры, которые другие модели примут. Пробуем следующую.
+ */
+function upstreamRejected(failure) {
+  return failure.status === 400 && failure.code !== 'invalid_request'
 }
 
 function quotaFailure(failure) {

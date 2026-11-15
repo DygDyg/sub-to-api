@@ -246,7 +246,7 @@ function renderProvider(provider, opened) {
       <div data-usage class="vstack gap-3"><p class="text-body-secondary mb-0">Квота загружается…</p></div>
       <div data-models><p class="text-body-secondary mb-0">Модели загружаются…</p></div>
       <p class="error small mb-0" data-status></p>
-      ${provider.custom ? `<p class="text-body-secondary small mb-0">Ключ задаётся в «Настройках», раздел «Свои API-провайдеры».</p>` : ''}
+      ${provider.custom ? '<div class="d-flex gap-2"><button type="button" class="btn btn-outline-secondary btn-sm" data-custom-edit>Изменить</button><button type="button" class="btn btn-outline-danger btn-sm" data-custom-remove>Удалить</button></div>' : ''}
       ${provider.id === 'antigravity' ? `<input class="form-control" name="clientId" placeholder="Google OAuth client ID" value="${escape(provider.clientId ?? '')}">` : ''}
       <form hidden class="vstack gap-2">
         <input class="form-control" name="callback" placeholder="Callback URL или код">
@@ -255,6 +255,15 @@ function renderProvider(provider, opened) {
       </form>
     </div>`
   const form = card.querySelector('form')
+  if (provider.custom) {
+    card.querySelectorAll('[data-logout]').forEach((button) => button.remove())
+    card.querySelector('[data-custom-edit]').onclick = () => openCustomForm(customProviderList.find((item) => item.id === provider.id))
+    card.querySelector('[data-custom-remove]').onclick = async () => {
+      if (!confirm(`Удалить провайдера «${provider.label}»?`)) return
+      await api(`/api/custom-providers/${encodeURIComponent(provider.id)}`, { method: 'DELETE' })
+      await load()
+    }
+  }
   card.querySelectorAll('[data-logout]').forEach((logout) => {
     logout.onclick = async () => {
       await api(`/api/providers/${provider.id}/accounts/${encodeURIComponent(logout.dataset.logout)}`, { method: 'DELETE' })
@@ -272,7 +281,13 @@ function openConnect(available) {
   let current = ''
   status.textContent = ''
   form.hidden = true
-  list.innerHTML = available.map((provider) => `<div class="d-flex justify-content-between align-items-center gap-3 border rounded p-3"><div><strong>${escape(provider.label)}</strong><br><span class="text-body-secondary small">${provider.loginKind === 'disabled' ? 'вход через подписку запрещён' : provider.loginKind}</span></div><button type="button" class="btn btn-primary btn-sm" data-connect="${provider.id}">Подключить</button></div>`).join('') || '<p class="text-body-secondary mb-0">Все провайдеры уже подключены</p>'
+  const oauth = available.map((provider) => `<div class="d-flex justify-content-between align-items-center gap-3 border rounded p-3"><div><strong>${escape(provider.label)}</strong><br><span class="text-body-secondary small">${provider.loginKind === 'disabled' ? 'вход через подписку запрещён' : provider.loginKind}</span></div><button type="button" class="btn btn-primary btn-sm" data-connect="${provider.id}">Подключить</button></div>`).join('')
+  const custom = '<div class="d-flex justify-content-between align-items-center gap-3 border rounded p-3"><div><strong>OpenAI-совместимый API</strong><br><span class="text-body-secondary small">api key · OpenAI, OpenRouter, DeepSeek, Ollama, Anthropic</span></div><button type="button" class="btn btn-primary btn-sm" data-custom>Подключить</button></div>'
+  list.innerHTML = oauth + custom
+  list.querySelector('[data-custom]').onclick = () => {
+    dialog.close()
+    openCustomForm()
+  }
   list.querySelectorAll('[data-connect]').forEach((button) => {
     button.onclick = async () => {
       current = button.dataset.connect
@@ -287,7 +302,7 @@ function openConnect(available) {
     }
   })
   document.querySelector('#connect-cancel').onclick = async () => {
-    if (current) await api(`/api/providers/${current}/cancel`, { method: 'POST', body: '{}' })
+    if (current) await api(`/api/providers/${current}/cancel`, { method: 'POST', body: '{}' }).catch(() => undefined)
     form.hidden = true
   }
   document.querySelector('#connect-finish').onclick = async () => {
@@ -898,7 +913,7 @@ function movePoolMember(from, to) {
 function renderPoolMembers() {
   const query = document.querySelector('#pool-search').value.trim().toLowerCase()
   const selected = new Set(poolMembers)
-  const models = poolCatalog.filter((model) => !selected.has(model.id) && `${model.id} ${model.name} ${model.provider || ''}`.toLowerCase().includes(query))
+  const models = poolCatalog.filter((model) => !selected.has(model.id) && `${model.id} ${model.name} ${model.provider || ''} ${modelTiers[model.id] || ''}`.toLowerCase().includes(query))
   const box = document.querySelector('#pool-members')
   if (!models.length) {
     const empty = document.createElement('p')
@@ -910,8 +925,9 @@ function renderPoolMembers() {
   box.replaceChildren(...models.map((model) => {
     const button = document.createElement('button')
     button.type = 'button'
-    button.className = 'list-group-item list-group-item-action text-start'
-    button.innerHTML = `<code>${escape(model.id)}</code><small class="d-block text-body-secondary">${escape(model.name || model.provider || '')}</small>`
+    button.className = 'list-group-item list-group-item-action text-start d-flex align-items-center gap-2'
+    const tier = modelTiers[model.id]
+    button.innerHTML = `<span class="min-w-0 flex-grow-1"><code>${escape(model.id)}</code><small class="d-block text-body-secondary">${escape(model.name || model.provider || '')}</small></span>${tier ? `<span class="badge rounded-pill border tier-${tier}">${tierName[tier]}</span>` : ''}`
     button.onclick = () => {
       poolMembers.push(model.id)
       renderPoolPicked()
@@ -1338,40 +1354,15 @@ document.querySelector('#proxy-test').onclick = async () => {
   } catch (error) { status.textContent = error.message }
 }
 
+let customProviderList = []
 function renderCustomProviders(list) {
-  const box = document.querySelector('#custom-providers')
-  if (!list.length) {
-    box.innerHTML = '<p class="text-body-secondary small mb-0">Пока нет. Добавьте провайдера, и его модели появятся как id/модель.</p>'
-    return
-  }
-  box.replaceChildren(...list.map((provider) => {
-    const row = document.createElement('div')
-    row.className = 'd-flex justify-content-between align-items-center gap-3 border rounded p-3'
-    row.innerHTML = `
-      <div class="min-w-0">
-        <strong>${escape(provider.label)}</strong>
-        <span class="text-body-secondary small">${provider.enabled === false ? ' · выключен' : ''}</span><br>
-        <span class="text-body-secondary small">${escape(provider.id)} · ${provider.protocol === 'anthropic' ? 'Anthropic' : 'OpenAI'} · ${escape(provider.baseUrl)} · ${provider.hasKey ? `ключ ${escape(provider.apiKey)}` : 'без ключа'}</span>
-      </div>
-      <div class="d-flex gap-2 flex-none">
-        <button type="button" class="btn btn-outline-secondary btn-sm" data-edit>Изменить</button>
-        <button type="button" class="btn btn-outline-danger btn-sm" data-remove>Удалить</button>
-      </div>`
-    row.querySelector('[data-edit]').onclick = () => openCustomForm(provider)
-    row.querySelector('[data-remove]').onclick = async () => {
-      if (!confirm(`Удалить провайдера «${provider.label}»?`)) return
-      await api(`/api/custom-providers/${encodeURIComponent(provider.id)}`, { method: 'DELETE' })
-      await load()
-    }
-    return row
-  }))
+  customProviderList = list
 }
 
 let customOriginalId = ''
 
 function openCustomForm(provider) {
-  const form = document.querySelector('#custom-form')
-  form.hidden = false
+  document.querySelector('#custom-dialog').showModal()
   customOriginalId = provider?.id || ''
   document.querySelector('#custom-label').value = provider?.label || ''
   document.querySelector('#custom-id').value = provider?.id || ''
@@ -1398,14 +1389,13 @@ function customPayload() {
   }
 }
 
-document.querySelector('#custom-add').onclick = () => openCustomForm()
-document.querySelector('#custom-cancel').onclick = () => { document.querySelector('#custom-form').hidden = true }
+document.querySelector('#custom-cancel').onclick = () => document.querySelector('#custom-dialog').close()
 document.querySelector('#custom-save').onclick = async () => {
   const status = document.querySelector('#custom-status')
   status.textContent = 'Сохраняю…'
   try {
     await api('/api/custom-providers', { method: 'POST', body: JSON.stringify(customPayload()) })
-    document.querySelector('#custom-form').hidden = true
+    document.querySelector('#custom-dialog').close()
     await load()
   } catch (error) { status.textContent = error.message }
 }
@@ -1565,37 +1555,25 @@ function compositionChart(models) {
 function barChart(models, mode) {
   const rows = [...models].sort((left, right) => viewTotal(right, mode) - viewTotal(left, mode)).slice(0, 8)
   const max = Math.max(...rows.map((model) => Math.max(mode === 'hide' ? freshInput(model) : model.input, model.output)), 1)
-  const width = 420
-  const label = 132
-  const bar = width - label - 8
-  const height = rows.length * 36 + 8
-  const marks = rows.map((model, index) => {
-    const y = index * 36 + 8
-    const output = Math.max(model.output ? 1 : 0, (model.output / max) * bar)
-    return `<text x="0" y="${y + 14}" font-size="11" fill="currentColor">${escape(shortModel(model.model))}</text>${inputMarks(model, mode, label, y, bar, max)}<rect x="${label}" y="${y + 14}" width="${output}" height="10" rx="2" fill="#fd7e14"><title>Выход ${formatTokens(model.output)}</title></rect>`
+  const segment = (value, color, title) => value > 0
+    ? `<span style="width:${(value / max) * 100}%;background:${color}" title="${title} ${formatTokens(value)}"></span>`
+    : ''
+  const marks = rows.map((model) => {
+    const input = inputParts(model, mode).map((part) => segment(part.value, part.color, part.title)).join('')
+    const total = mode === 'hide' ? freshInput(model) : model.input
+    return `<div class="stats-io-row"><span class="small text-truncate" title="${escape(model.model)}">${escape(shortModel(model.model))}</span><div class="vstack gap-1"><div class="stats-io-bar">${input}</div><div class="stats-io-bar">${segment(model.output, '#fd7e14', 'Выход')}</div></div><span class="small text-body-secondary text-end">${formatTokens(total)} / ${formatTokens(model.output)}</span></div>`
   }).join('')
-  return `<svg class="stats-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Вход и выход токенов">${marks}</svg><div class="stats-legend mt-2">${barLegend(mode, rows)}</div>`
+  return `<div class="vstack gap-2" role="img" aria-label="Вход и выход токенов">${marks}</div><div class="stats-legend mt-2">${barLegend(mode, rows)}</div>`
 }
 
-function inputMarks(model, mode, x, y, bar, max) {
-  if (mode !== 'split') {
-    const input = mode === 'hide' ? freshInput(model) : model.input
-    const width = Math.max(input ? 1 : 0, (input / max) * bar)
-    const title = mode === 'hide' ? 'Вход без кеша' : 'Вход'
-    return `<rect x="${x}" y="${y}" width="${width}" height="10" rx="2" fill="#0d6efd"><title>${title} ${formatTokens(input)}</title></rect>`
-  }
-  const parts = [
+function inputParts(model, mode) {
+  if (mode === 'hide') return [{ value: freshInput(model), color: '#0d6efd', title: 'Вход без кеша' }]
+  if (mode !== 'split') return [{ value: model.input, color: '#0d6efd', title: 'Вход' }]
+  return [
     { value: freshInput(model), color: '#0d6efd', title: 'Новый вход' },
     { value: model.cacheRead || 0, color: '#20c997', title: 'Кеш' },
     { value: model.cacheWrite || 0, color: '#6f42c1', title: 'Запись кеша' },
-  ].filter((part) => part.value > 0)
-  let cursor = x
-  return parts.map((part) => {
-    const width = Math.max(1, (part.value / max) * bar)
-    const mark = `<rect x="${cursor}" y="${y}" width="${width}" height="10" rx="2" fill="${part.color}"><title>${part.title} ${formatTokens(part.value)}</title></rect>`
-    cursor += width
-    return mark
-  }).join('')
+  ]
 }
 
 function barLegend(mode, rows) {
