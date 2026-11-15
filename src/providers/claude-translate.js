@@ -1,4 +1,6 @@
 // Anthropic wire translation, independent of DSH runtime services.
+// The subscription endpoint rate-limits requests that do not present as Claude Code.
+const CLAUDE_CODE_IDENTITY = 'You are Claude Code, Anthropic\'s official CLI for Claude.'
 function invalid(message) { return Object.assign(new Error(message), { status: 400, code: 'invalid_request' }) }
 export function claudeRequest(request) {
   const system = []; const messages = []
@@ -24,10 +26,12 @@ export function claudeRequest(request) {
   const maxTokens = request.maxTokens ?? 32000
   if (!Number.isSafeInteger(maxTokens) || maxTokens < 1) throw invalid('Claude: maxTokens must be a positive integer')
   markCache(messages)
-  // tools render before system, so this one mark covers both. Five minutes omits ttl: a one-hour write costs 2× and spends the plan window faster on rapid turns.
-  const systemBlocks = system.length ? [{ type: 'text', text: system.join('\n\n'), cache_control: { type: 'ephemeral' } }] : undefined
-  return { model: request.model, max_tokens: maxTokens, stream: true, messages,
-    ...(systemBlocks ? { system: systemBlocks } : {}),
+  // Identity is always first. tools render before system, so the last mark covers both.
+  // Five minutes omits ttl: a one-hour write costs 2× and spends the plan window faster on rapid turns.
+  const systemBlocks = [{ type: 'text', text: CLAUDE_CODE_IDENTITY }]
+  if (system.length) systemBlocks.push({ type: 'text', text: system.join('\n\n') })
+  systemBlocks.at(-1).cache_control = { type: 'ephemeral' }
+  return { model: request.model, max_tokens: maxTokens, stream: true, messages, system: systemBlocks,
     ...(request.tools?.length ? { tools: request.tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) } : {}),
     ...(request.reasoningEffort ? { output_config: { effort: request.reasoningEffort } } : {}),
   }

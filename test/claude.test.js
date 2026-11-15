@@ -93,7 +93,8 @@ test('401 retry refreshes only rejected account once; HTTP errors stay errors', 
 
 test('request translation preserves system, tools, tool results and validates arguments', () => {
   const result = claudeRequest({ ...req, reasoningEffort: 'high', messages: [{ role: 'system', content: 'Rules' }, { role: 'assistant', toolCalls: [{ id: 'call', name: 'lookup', arguments: '{"x":1}' }] }, { role: 'tool', toolCallId: 'call', content: 'result' }], tools: [{ name: 'lookup', parameters: { type: 'object' } }] })
-  assert.equal(result.system[0].text, 'Rules'); assert.deepEqual(result.system[0].cache_control, { type: 'ephemeral' }); assert.deepEqual(result.messages.at(-1).content.at(-1).cache_control, { type: 'ephemeral' }); assert.deepEqual(result.messages[0].content[0].input, { x: 1 }); assert.equal(result.messages[1].content[0].tool_use_id, 'call'); assert.equal(result.tools[0].input_schema.type, 'object')
+  assert.equal(result.system[0].text, 'You are Claude Code, Anthropic\'s official CLI for Claude.'); assert.equal(result.system[1].text, 'Rules'); assert.deepEqual(result.system[1].cache_control, { type: 'ephemeral' }); assert.equal(result.system[0].cache_control, undefined); assert.deepEqual(result.messages.at(-1).content.at(-1).cache_control, { type: 'ephemeral' }); assert.deepEqual(result.messages[0].content[0].input, { x: 1 }); assert.equal(result.messages[1].content[0].tool_use_id, 'call'); assert.equal(result.tools[0].input_schema.type, 'object')
+  assert.equal(claudeRequest(req).system[0].text, result.system[0].text)
   assert.throws(() => claudeRequest({ ...req, maxTokens: 0 }), /maxTokens/)
   assert.throws(() => claudeRequest({ ...req, reasoningEffort: 'unsupported' }), /reasoning effort/)
   assert.throws(() => claudeRequest({ ...req, messages: [{ role: 'assistant', toolCalls: [{ arguments: 'broken' }] }] }), /arguments/)
@@ -113,7 +114,7 @@ test('fragmented UTF-8 SSE translates reasoning text multiple tools usage and st
 })
 
 test('provider sends upstream identity and translates length finish', async () => {
-  const provider = new ClaudeProvider(store(), { fetch: async (_url, init) => { assert.match(init.headers['user-agent'], /^claude-cli\//); assert.equal(init.headers['x-app'], 'cli'); assert.equal(JSON.parse(init.body).model, req.model); return new Response(stream([{ type: 'message_delta', delta: { stop_reason: 'max_tokens' } }, { type: 'message_stop' }]).body) } })
+  const provider = new ClaudeProvider(store(), { fetch: async (_url, init) => { assert.match(init.headers['user-agent'], /^claude-cli\//); assert.equal(init.headers['x-app'], 'cli'); const body = JSON.parse(init.body); assert.equal(body.model, req.model); assert.match(body.system[0].text, /Claude Code/); return new Response(stream([{ type: 'message_delta', delta: { stop_reason: 'max_tokens' } }, { type: 'message_stop' }]).body) } })
   assert.equal((await collect(provider.stream(req))).at(-1).finishReason, 'length')
 })
 
