@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="ru" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SubToAPI</title>
+  <link rel="icon" href="/icon.png" type="image/png">
+  <link rel="stylesheet" href="/bootstrap.min.css">
+  <script>document.documentElement.dataset.bsTheme = localStorage.getItem('theme') || 'light'</script>
+  <style>
+    .app-shell { min-height: 100vh; }
+    .sidebar { width: 240px; flex: none; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    nav.tabs { flex: none; min-height: 0; overflow: auto; }
+    .side-limits { flex: 1; min-height: 0; overflow: auto; padding: .75rem .75rem 1rem; border-top: 1px solid var(--bs-border-color); }
+    .side-limits-title { margin: 0 0 .65rem; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--bs-secondary-color); }
+    .side-limit + .side-limit { margin-top: .85rem; }
+    .side-limit { --dot: var(--bs-secondary-color); }
+    .side-limit[data-id="codex"] { --dot: #10a37f; }
+    .side-limit[data-id="claude"] { --dot: #d97757; }
+    .side-limit[data-id="grok"] { --dot: var(--bs-body-color); }
+    .side-limit[data-id="copilot"] { --dot: #1f6feb; }
+    .side-limit[data-id="antigravity"] { --dot: #4285f4; }
+    .side-limit-name { display: flex; align-items: center; gap: .4rem; min-width: 0; font-size: .8rem; font-weight: 600; }
+    .side-limit-name::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; background: var(--dot); flex: none; }
+    .side-limit-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .side-meter { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: baseline; gap: .1rem .35rem; margin-top: .4rem; font-size: .72rem; }
+    .side-meter span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--bs-secondary-color); }
+    .side-reset { grid-column: 2; white-space: nowrap; color: var(--bs-secondary-color); font-variant-numeric: tabular-nums; }
+    .side-meter strong { grid-column: 3; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .side-meter .progress { grid-column: 1 / -1; height: 4px; }
+    nav.tabs .nav-link { display: flex; align-items: center; gap: .5rem; width: 100%; }
+    nav.tabs svg, .btn-icon svg, .tags svg { stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+    nav.tabs svg, .btn-icon svg { width: 1rem; height: 1rem; }
+    .tags svg { width: .75rem; height: .75rem; }
+    .tab { display: none; }
+    .tab.active { display: block; }
+    .btn-icon { width: 2.1rem; height: 2.1rem; padding: 0; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+    dialog { width: min(32rem, calc(100% - 2rem)); border: var(--bs-border-width) solid var(--bs-border-color); border-radius: var(--bs-border-radius-lg); background: var(--bs-body-bg); color: var(--bs-body-color); box-shadow: var(--bs-box-shadow-lg); }
+    dialog::backdrop { background: rgb(0 0 0 / 45%); }
+    pre { margin: 0; padding: .75rem 1rem; background: var(--bs-tertiary-bg); border: var(--bs-border-width) solid var(--bs-border-color); border-radius: var(--bs-border-radius); font-size: .8125rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .card > pre, .card pre { border: 0; border-radius: 0; }
+    .journal pre, dialog pre { max-height: 16rem; }
+    .journal > summary, .provider > summary, .model-picker > summary { cursor: pointer; list-style: none; }
+    .journal > summary::-webkit-details-marker, .provider > summary::-webkit-details-marker, .model-picker > summary::-webkit-details-marker { display: none; }
+    .provider > summary::before, .journal > summary::before, .model-picker > summary::after { content: ""; width: .45rem; height: .45rem; border-right: 2px solid var(--bs-secondary-color); border-bottom: 2px solid var(--bs-secondary-color); transform: rotate(-45deg); flex: none; }
+    .provider[open] > summary::before, .journal[open] > summary::before, .model-picker[open] > summary::after { transform: rotate(45deg); }
+    .provider { --dot: var(--bs-secondary-color); }
+    .provider[data-id="codex"] { --dot: #10a37f; }
+    .provider[data-id="claude"] { --dot: #d97757; }
+    .provider[data-id="grok"] { --dot: var(--bs-body-color); }
+    .provider[data-id="copilot"] { --dot: #1f6feb; }
+    .provider[data-id="antigravity"] { --dot: #4285f4; }
+    .provider > summary h3::before { content: ""; width: .55rem; height: .55rem; border-radius: 50%; background: var(--dot); display: inline-block; margin-right: .45rem; }
+    #requests:empty, #providers:empty { display: flex; align-items: center; justify-content: center; min-height: 9rem; padding: 1.75rem; text-align: center; color: var(--bs-secondary-color); border: 1px dashed var(--bs-border-color); border-radius: var(--bs-border-radius); background: var(--bs-body-bg); }
+    #requests:empty::before, #providers:empty::before { max-width: 36ch; line-height: 1.5; }
+    #requests:empty::before { content: "Журнал пуст. Запросы появятся после первого вызова API."; }
+    #journal-pending { position: fixed; z-index: 1040; left: 50%; bottom: 1.25rem; transform: translateX(-50%); box-shadow: var(--bs-box-shadow); }
+    #providers:empty::before { content: "Нет подключённых провайдеров. Нажмите «Добавить», чтобы войти в подписку."; }
+    .model-list, #pool-members { max-height: 20rem; overflow: auto; }
+    dialog.pool-dialog { width: min(40rem, calc(100% - 2rem)); }
+    #pool-add-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+    #pool-add-toggle svg { transition: transform .15s ease; }
+    .pool-member code, .pool-card code { overflow-wrap: anywhere; }
+    .pool-grip { cursor: grab; color: var(--bs-secondary-color); display: inline-flex; flex: none; }
+    .pool-grip:active { cursor: grabbing; }
+    .pool-grip svg { width: 1rem; height: 1rem; display: block; }
+    .pool-actions { display: flex; gap: .25rem; flex: none; }
+    .pool-actions .btn-icon { width: 1.7rem; height: 1.7rem; }
+    .pool-actions .btn-icon svg { width: .85rem; height: .85rem; }
+    .pool-member.drag-over { background: var(--bs-primary-bg-subtle); }
+    .pool-member.dragging { opacity: .45; }
+    .price-col { min-width: 7rem; text-align: right; font-variant-numeric: tabular-nums; font-size: .875rem; }
+    .price-col span { display: block; color: var(--bs-secondary-color); font-size: .7rem; letter-spacing: .04em; text-transform: uppercase; }
+    .tags { display: flex; flex-wrap: wrap; gap: .35rem; }
+    .catalog-id { display: flex; align-items: center; gap: .25rem; min-width: 0; }
+    .url-line a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
+    .settings-card { max-width: 40rem; }
+    .form-switch.switch-end { min-height: 0; padding-left: 0; }
+    .form-switch.switch-end .form-check-input { float: none; margin-left: 0; }
+    .error { color: var(--bs-danger); }
+    p.error:empty { display: none; }
+    @media (max-width: 767.98px) {
+      .app-shell { flex-direction: column; }
+      .sidebar { width: 100%; height: auto; min-height: 0; z-index: 1030; flex-direction: row; flex-wrap: wrap; align-items: center; }
+      .side-limits { width: 100%; flex: none; max-height: 8.5rem; }
+      .brand small { display: none; }
+      nav.tabs { flex-direction: row !important; flex-wrap: nowrap; }
+      nav.tabs .nav-link { width: auto; white-space: nowrap; }
+      nav.tabs svg { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell d-flex">
+    <aside class="sidebar border-end bg-body-tertiary">
+      <div class="brand d-flex align-items-center gap-2 px-3 py-3">
+        <img src="/icon.png" alt="" width="32" height="32" class="rounded">
+        <div>
+          <div class="fw-semibold">SubToAPI</div>
+          <small class="text-body-secondary">Локальный шлюз</small>
+        </div>
+      </div>
+      <nav class="nav nav-pills flex-column gap-1 px-2 pb-3 tabs" aria-label="Разделы">
+        <button type="button" class="nav-link active" data-tab="home" aria-selected="true"><svg viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg>Главная</button>
+        <button type="button" class="nav-link" data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Настройки</button>
+        <button type="button" class="nav-link" data-tab="models"><svg viewBox="0 0 24 24"><path d="M12 3 3 8l9 5 9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></svg>Модели</button>
+        <button type="button" class="nav-link" data-tab="pools"><svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>Пулы</button>
+        <button type="button" class="nav-link" data-tab="journal"><svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10"/></svg>Журнал</button>
+        <button type="button" class="nav-link" data-tab="docs"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M6 19a2 2 0 0 1 2-2h11"/></svg>Документация</button>
+      </nav>
+      <div id="side-limits" class="side-limits" hidden></div>
+    </aside>
+    <div class="flex-grow-1 min-w-0">
+      <header class="navbar sticky-top border-bottom bg-body px-3">
+        <span class="navbar-text fw-semibold mb-0" id="crumb">Главная</span>
+        <div class="ms-auto d-flex gap-2">
+          <button id="theme" class="btn btn-outline-secondary btn-icon" type="button" title="Тёмная тема" aria-label="Тёмная тема"></button>
+          <button id="refresh" class="btn btn-outline-secondary btn-icon" type="button" title="Обновить" aria-label="Обновить"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 4v6h-6"/></svg></button>
+        </div>
+      </header>
+      <main class="container-xxl py-4">
+        <section id="tab-home" class="tab active">
+          <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
+            <div>
+              <h1 class="h3 mb-1">Провайдеры</h1>
+              <p class="text-body-secondary mb-0">Подключённые подписки, аккаунты и остаток лимитов.</p>
+            </div>
+            <button id="open-connect" class="btn btn-primary" type="button">Добавить</button>
+          </div>
+          <div id="providers" class="vstack gap-3"></div>
+          <dialog id="connect-dialog" class="p-4">
+            <form method="dialog" class="vstack gap-3">
+              <div class="d-flex justify-content-between align-items-center gap-3">
+                <h2 class="h5 mb-0">Подключить провайдера</h2>
+                <button class="btn btn-outline-secondary btn-sm" value="cancel">Закрыть</button>
+              </div>
+              <div id="connect-list" class="vstack gap-2"></div>
+              <p id="connect-status" class="error small mb-0"></p>
+              <div id="connect-form" hidden class="vstack gap-2">
+                <input class="form-control" name="clientId" placeholder="Google OAuth client ID">
+                <input class="form-control" name="callback" placeholder="Callback URL или код">
+                <p class="text-body-secondary small mb-0" data-instructions></p>
+                <div class="d-flex gap-2">
+                  <button type="button" class="btn btn-primary" id="connect-finish">Завершить вход</button>
+                  <button type="button" class="btn btn-outline-secondary" id="connect-cancel">Отмена</button>
+                </div>
+              </div>
+            </form>
+          </dialog>
+        </section>
+
+        <section id="tab-journal" class="tab">
+          <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
+            <div>
+              <h1 class="h3 mb-1">Журнал</h1>
+              <p class="text-body-secondary mb-0">Последние запросы. Новые подгружаются сами и не сдвигают открытый текст.</p>
+            </div>
+            <div class="d-flex align-items-center gap-3">
+              <div class="form-check form-switch mb-0" title="Пишет последний запрос в settings/last-request.txt">
+                <input class="form-check-input" id="save-full" type="checkbox" role="switch">
+                <label class="form-check-label" for="save-full">Сохранять целиком</label>
+              </div>
+              <button type="button" id="open-full" class="btn btn-outline-secondary" disabled>Открыть лог</button>
+            </div>
+          </div>
+          <div id="requests" class="vstack gap-3"></div>
+          <button type="button" id="journal-pending" class="btn btn-primary btn-sm" hidden>Показать новые</button>
+          <dialog id="full-log" class="p-4">
+            <form method="dialog" class="vstack gap-3">
+              <div class="d-flex justify-content-between align-items-center gap-3">
+                <h2 class="h5 mb-0">Последний запрос целиком</h2>
+                <button class="btn btn-outline-secondary btn-sm" value="cancel">Закрыть</button>
+              </div>
+              <strong>Запрос</strong>
+              <pre id="full-request"></pre>
+              <strong>Ответ</strong>
+              <pre id="full-response"></pre>
+            </form>
+          </dialog>
+        </section>
+
+        <section id="tab-settings" class="tab">
+          <div class="mb-4">
+            <h1 class="h3 mb-1">Настройки</h1>
+            <p class="text-body-secondary mb-0">Адрес, ключ и доступ к локальному API.</p>
+          </div>
+          <article class="card shadow-sm settings-card">
+            <div class="card-body vstack gap-3">
+              <div>
+                <div class="form-label text-body-secondary mb-1">Base URL</div>
+                <code id="base-url" class="user-select-all">…</code>
+              </div>
+              <form id="settings-form" class="vstack gap-3">
+                <div>
+                  <label class="form-label" for="exposure">Сеть</label>
+                  <select id="exposure" name="exposure" class="form-select">
+                    <option value="localhost">Только этот компьютер</option>
+                    <option value="lan">Локальная сеть</option>
+                    <option value="internet">Разрешить вход из интернета</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" for="settings-exposure">Доступ к настройкам</label>
+                  <select id="settings-exposure" name="settingsExposure" class="form-select">
+                    <option value="localhost">Только этот компьютер</option>
+                    <option value="lan">Локальная сеть</option>
+                    <option value="internet">Разрешить вход из интернета</option>
+                  </select>
+                </div>
+                <p id="remote-note" class="text-body-secondary small mb-0"></p>
+                <div>
+                  <label class="form-label" for="settings-key-scope">Ключ для входа</label>
+                  <select id="settings-key-scope" name="settingsKeyScope" class="form-select">
+                    <option value="internet">Требовать только из интернета</option>
+                    <option value="lan">Требовать и из локальной сети</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" for="settings-key">Ключ настроек</label>
+                  <div class="input-group">
+                    <input id="settings-key" name="settingsKey" class="form-control" type="password" autocomplete="off" spellcheck="false">
+                    <button type="button" id="show-settings-key" class="btn btn-outline-secondary btn-icon" title="Показать" aria-label="Показать"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                    <button type="button" id="copy-settings-key" class="btn btn-outline-secondary btn-icon" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
+                    <button type="button" id="regenerate-settings-key" class="btn btn-outline-secondary btn-icon" title="Новый ключ" aria-label="Новый ключ"><svg viewBox="0 0 24 24"><path d="M21 4v6h-6"/><path d="M3 20v-6h6"/><path d="M20 10a8 8 0 0 0-14-3L3 10"/><path d="M4 14a8 8 0 0 0 14 3l3-3"/></svg></button>
+                  </div>
+                </div>
+                <p id="settings-key-note" class="text-body-secondary small mb-0"></p>
+                <div>
+                  <label class="form-label" for="auth-mode">Ключ API</label>
+                  <select id="auth-mode" name="authMode" class="form-select">
+                    <option value="required">Требовать указанный ключ</option>
+                    <option value="optional">Без ключа или с любым ключом</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" for="api-key">Значение ключа</label>
+                  <div class="input-group">
+                    <input id="api-key" name="apiKey" class="form-control" type="password" autocomplete="off" spellcheck="false">
+                    <button type="button" id="show-key" class="btn btn-outline-secondary btn-icon" title="Показать" aria-label="Показать"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                    <button type="button" id="copy-key" class="btn btn-outline-secondary btn-icon" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
+                    <button type="button" id="regenerate-key" class="btn btn-outline-secondary btn-icon" title="Новый ключ" aria-label="Новый ключ"><svg viewBox="0 0 24 24"><path d="M21 4v6h-6"/><path d="M3 20v-6h6"/><path d="M20 10a8 8 0 0 0-14-3L3 10"/><path d="M4 14a8 8 0 0 0 14 3l3-3"/></svg></button>
+                  </div>
+                </div>
+                <div>
+                  <label class="form-label" for="port">Порт</label>
+                  <div class="input-group">
+                    <input id="port" name="port" class="form-control" inputmode="numeric" aria-describedby="port-status">
+                    <button type="button" id="apply-port" class="btn btn-primary">Применить</button>
+                  </div>
+                </div>
+                <div class="d-flex justify-content-between align-items-center gap-3">
+                  <p class="text-body-secondary mb-0">Активные запросы: <span id="active">0</span></p>
+                  <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+                <p id="port-status" class="error small mb-0"></p>
+                <p id="network-note" class="text-body-secondary small mb-0"></p>
+              </form>
+            </div>
+          </article>
+        </section>
+
+        <section id="tab-pools" class="tab">
+          <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
+            <div>
+              <h1 class="h3 mb-1">Пулы</h1>
+              <p class="text-body-secondary mb-0">В клиенте укажите <code>pool/имя</code>. Диалог держится на одной модели, пока остаток больше 5% и передан <code>prompt_cache_key</code>. Если модель ответила ошибкой до первого токена, пул пробует следующую, но не ту, в чьё окно не влезает уже заполненный контекст этого запроса.</p>
+            </div>
+            <button id="open-pool" class="btn btn-primary d-inline-flex align-items-center gap-2" type="button">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              Добавить
+            </button>
+          </div>
+          <div id="pool-list" class="vstack gap-3"></div>
+          <dialog id="pool-dialog" class="pool-dialog p-4">
+            <form id="pool-form" class="vstack gap-3">
+              <div class="d-flex justify-content-between align-items-center gap-3">
+                <h2 class="h5 mb-0" id="pool-dialog-title">Новый пул</h2>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-pool-close>Закрыть</button>
+              </div>
+              <div class="row g-3">
+                <div class="col-md-4">
+                  <label class="form-label" for="pool-id">Имя</label>
+                  <input id="pool-id" class="form-control" name="id" placeholder="fast" autocomplete="off" spellcheck="false" required>
+                </div>
+                <div class="col-md-8">
+                  <label class="form-label" for="pool-strategy">Условие</label>
+                  <select id="pool-strategy" class="form-select" name="strategy">
+                    <option value="most-remaining">Где больше остаток</option>
+                    <option value="first-available">Первая с оставшимся лимитом</option>
+                  </select>
+                </div>
+              </div>
+              <div class="d-flex justify-content-between align-items-start gap-3">
+                <div>
+                  <div class="form-label mb-0">Модели</div>
+                  <p class="text-body-secondary small mb-0">Порядок сверху вниз. Для «Первая с оставшимся лимитом» берётся первая подходящая.</p>
+                </div>
+                <button type="button" id="pool-add-toggle" class="btn btn-outline-secondary btn-sm d-inline-flex align-items-center gap-1" aria-expanded="false" aria-controls="pool-picker">
+                  Добавить
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+              </div>
+              <div id="pool-picker" class="border rounded p-2" hidden>
+                <input id="pool-search" class="form-control form-control-sm" placeholder="Найти модель" autocomplete="off" spellcheck="false">
+                <div id="pool-members" class="list-group list-group-flush mt-2"></div>
+              </div>
+              <div id="pool-picked" class="list-group"></div>
+              <div class="d-flex justify-content-end">
+                <button type="submit" class="btn btn-primary">Сохранить</button>
+              </div>
+              <p id="pool-status" class="error small mb-0"></p>
+            </form>
+          </dialog>
+        </section>
+
+        <section id="tab-models" class="tab">
+          <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
+            <div>
+              <h1 class="h3 mb-1">Модели</h1>
+              <p class="text-body-secondary mb-0">Цены справа — публичный тариф API за 100K токенов. Это ориентир для сравнения; фактические цены могут отличаться. Подписка по ним отдельно не списывает.</p>
+            </div>
+            <input id="model-search" class="form-control" placeholder="Поиск" style="width: 16rem">
+          </div>
+          <div id="catalog" class="vstack gap-3"><p class="text-body-secondary">Загрузка…</p></div>
+        </section>
+
+        <section id="tab-docs" class="tab">
+          <div class="mb-4">
+            <h1 class="h3 mb-1">Документация</h1>
+            <p class="text-body-secondary mb-0">OpenAI-совместимый адрес для других программ. Если ключ обязателен, передайте его в <code>Authorization: Bearer …</code> или <code>x-api-key</code>.</p>
+          </div>
+          <div class="input-group url-line mb-4">
+            <a id="docs-base" class="form-control font-monospace" href="/v1" target="_blank" rel="noopener">/v1</a>
+            <button type="button" class="btn btn-outline-secondary btn-icon" data-copy-target="docs-base" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-md-6">
+              <article class="card h-100 shadow-sm">
+                <div class="card-body">
+                  <div class="d-flex align-items-center gap-2 mb-3"><span class="badge text-bg-success">GET</span><strong>Список моделей</strong></div>
+                  <div class="input-group url-line">
+                    <a id="link-models" class="form-control font-monospace" href="/v1/models" target="_blank" rel="noopener">/v1/models</a>
+                    <button type="button" class="btn btn-outline-secondary btn-icon" data-copy-target="link-models" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
+                  </div>
+                  <p class="text-body-secondary small mt-3 mb-0">Чат-модели: <code>/v1/models</code>. Изображения: <code>/v1/models?capability=image</code>. Видео: <code>/v1/models?capability=video</code>.</p>
+                </div>
+              </article>
+            </div>
+            <div class="col-md-6">
+              <article class="card h-100 shadow-sm">
+                <div class="card-body">
+                  <div class="d-flex align-items-center gap-2 mb-3"><span class="badge text-bg-primary">POST</span><strong>Запрос к модели</strong></div>
+                  <div class="input-group url-line">
+                    <a id="link-chat" class="form-control font-monospace" href="/v1/chat/completions">/v1/chat/completions</a>
+                    <button type="button" class="btn btn-outline-secondary btn-icon" data-copy-target="link-chat" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
+                  </div>
+                  <p class="text-body-secondary small mt-3 mb-0">JSON-ответ или поток SSE при <code>"stream": true</code>. Поддерживаются <code>messages</code>, лимиты токенов, <code>reasoning_effort</code> и function tools.</p>
+                </div>
+              </article>
+            </div>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-md-6">
+              <article class="card h-100 shadow-sm">
+                <div class="card-body">
+                  <div class="d-flex align-items-center gap-2 mb-3"><span class="badge text-bg-primary">POST</span><strong>Изображение</strong></div>
+                  <div class="input-group url-line">
+                    <a id="link-images" class="form-control font-monospace" href="/v1/images/generations">/v1/images/generations</a>
+                    <button type="button" class="btn btn-outline-secondary btn-icon" data-copy-target="link-images" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
+                  </div>
+                  <p class="text-body-secondary small mt-3 mb-0"><code>codex</code> или <code>grok</code>. Тело: <code>prompt</code>, необязательно <code>provider</code>, <code>size</code>, <code>quality</code>.</p>
+                </div>
+              </article>
+            </div>
+            <div class="col-md-6">
+              <article class="card h-100 shadow-sm">
+                <div class="card-body">
+                  <div class="d-flex align-items-center gap-2 mb-3"><span class="badge text-bg-primary">POST</span><strong>Видео</strong></div>
+                  <div class="input-group url-line">
+                    <a id="link-videos" class="form-control font-monospace" href="/v1/videos">/v1/videos</a>
+                    <button type="button" class="btn btn-outline-secondary btn-icon" data-copy-target="link-videos" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
+                  </div>
+                  <p class="text-body-secondary small mt-3 mb-0">Только <code>grok</code>, 1–15 секунд. Ответ содержит <code>id</code>; готовность проверяется через <code id="video-status">GET /v1/videos/{id}</code>.</p>
+                </div>
+              </article>
+            </div>
+          </div>
+          <div class="card shadow-sm mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <strong>Пример</strong>
+              <button type="button" class="btn btn-outline-secondary btn-icon" data-copy-target="curl-example" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
+            </div>
+            <pre id="curl-example" class="mb-0">curl /v1/chat/completions</pre>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-lg-8">
+              <article class="card shadow-sm">
+                <div class="card-body">
+                  <div class="d-flex align-items-center gap-2 mb-3"><span class="badge text-bg-success">GET</span><strong>Квоты подписок</strong></div>
+                  <div class="input-group url-line">
+                    <a id="link-usage" class="form-control font-monospace" href="/api/usage" target="_blank" rel="noopener">/api/usage</a>
+                    <button type="button" class="btn btn-outline-secondary btn-icon" data-copy-target="link-usage" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
+                  </div>
+                  <p class="text-body-secondary small mt-3 mb-0">Доступ как у страницы настроек, без API-ключа. Один ответ по всем подключённым провайдерам: план, аккаунты и окна лимитов. Сервер отдаёт кеш 5 минут; <code>?refresh=1</code> запрашивает заново и при ошибке оставляет последнюю удачную квоту.</p>
+                </div>
+              </article>
+            </div>
+          </div>
+          <p class="text-body-secondary small mb-0">Другие пути <code>/v1</code> возвращают 404. Страницу настроек можно открыть только с этого компьютера, из локальной сети или из интернета — отдельно от API. Ключ настроек обязателен из интернета, а из локальной сети — если это включено. С этого компьютера ключ не спрашивается.</p>
+        </section>
+      </main>
+    </div>
+  </div>
+  <dialog id="settings-login">
+    <form class="vstack gap-3">
+      <h2 class="h5 mb-0">Ключ для входа</h2>
+      <p class="text-body-secondary mb-0">С этого адреса страница настроек открывается только с ключом.</p>
+      <input id="settings-login-key" class="form-control" type="password" autocomplete="current-password" spellcheck="false" required>
+      <p id="settings-login-status" class="error small mb-0"></p>
+      <div class="d-flex gap-2 justify-content-end">
+        <button type="button" class="btn btn-outline-secondary" id="settings-login-cancel">Отмена</button>
+        <button type="submit" class="btn btn-primary">Войти</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

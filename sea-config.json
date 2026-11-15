@@ -1,0 +1,12 @@
+{
+  "main": "dist/app.cjs",
+  "output": "dist/sea.blob",
+  "disableExperimentalSEAWarning": true,
+  "useSnapshot": false,
+  "assets": {
+    "index.html": "web/index.html",
+    "app.js": "web/app.js",
+    "icon.png": "web/icon.png",
+    "bootstrap.min.css": "web/bootstrap.min.css"
+  }
+}
