@@ -12,6 +12,7 @@
     .sidebar { width: 240px; flex: none; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
     nav.tabs { flex: none; min-height: 0; overflow: auto; }
     .side-limits { flex: 1; min-height: 0; overflow: auto; padding: .75rem .75rem 1rem; border-top: 1px solid var(--bs-border-color); }
+    .sidebar-version { flex: none; margin-top: auto; padding: .7rem .9rem; border-top: 1px solid var(--bs-border-color); font-size: .72rem; color: var(--bs-secondary-color); font-variant-numeric: tabular-nums; }
     .side-limits-title { margin: 0 0 .65rem; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--bs-secondary-color); }
     .side-limit + .side-limit { margin-top: .85rem; }
     .side-limit { --dot: var(--bs-secondary-color); }
@@ -74,7 +75,18 @@
     .tags { display: flex; flex-wrap: wrap; gap: .35rem; }
     .catalog-id { display: flex; align-items: center; gap: .25rem; min-width: 0; }
     .url-line a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
-    .settings-card { max-width: 40rem; }
+    .settings-key { display: grid; grid-template-columns: minmax(8rem, 11rem) minmax(0, 1fr); gap: .5rem; align-items: stretch; }
+    #settings-form .input-group { min-width: 0; }
+    #settings-form .input-group > .form-control { min-width: 0; }
+    #settings-form .input-group > .btn-icon { width: 2.5rem; height: auto; align-self: stretch; }
+    @media (max-width: 575.98px) {
+      .settings-key { grid-template-columns: minmax(0, 1fr); }
+    }
+    .stats-chart { width: 100%; height: auto; display: block; }
+    .stats-share { display: flex; height: .65rem; border-radius: 4px; overflow: hidden; background: var(--bs-secondary-bg); }
+    .stats-share span { display: block; min-width: 2px; height: 100%; }
+    .stats-legend { display: flex; flex-wrap: wrap; gap: .35rem .75rem; }
+    .stats-swatch { width: .7rem; height: .7rem; border-radius: 2px; display: inline-block; }
     .form-switch.switch-end { min-height: 0; padding-left: 0; }
     .form-switch.switch-end .form-check-input { float: none; margin-left: 0; }
     .error { color: var(--bs-danger); }
@@ -83,6 +95,7 @@
       .app-shell { flex-direction: column; }
       .sidebar { width: 100%; height: auto; min-height: 0; z-index: 1030; flex-direction: row; flex-wrap: wrap; align-items: center; }
       .side-limits { width: 100%; flex: none; max-height: 8.5rem; }
+      .sidebar-version { width: 100%; margin-top: 0; }
       .brand small { display: none; }
       nav.tabs { flex-direction: row !important; flex-wrap: nowrap; }
       nav.tabs .nav-link { width: auto; white-space: nowrap; }
@@ -106,9 +119,11 @@
         <button type="button" class="nav-link" data-tab="models"><svg viewBox="0 0 24 24"><path d="M12 3 3 8l9 5 9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></svg>Модели</button>
         <button type="button" class="nav-link" data-tab="pools"><svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>Пулы</button>
         <button type="button" class="nav-link" data-tab="journal"><svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10"/></svg>Журнал</button>
+        <button type="button" class="nav-link" data-tab="stats"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="M8 16v-5M12 16V8M16 16v-3"/></svg>Статистика</button>
         <button type="button" class="nav-link" data-tab="docs"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M6 19a2 2 0 0 1 2-2h11"/></svg>Документация</button>
       </nav>
       <div id="side-limits" class="side-limits" hidden></div>
+      <div id="app-version" class="sidebar-version"></div>
     </aside>
     <div class="flex-grow-1 min-w-0">
       <header class="navbar sticky-top border-bottom bg-body px-3">
@@ -184,79 +199,97 @@
             <h1 class="h3 mb-1">Настройки</h1>
             <p class="text-body-secondary mb-0">Адрес, ключ и доступ к локальному API.</p>
           </div>
-          <article class="card shadow-sm settings-card">
-            <div class="card-body vstack gap-3">
-              <div>
-                <div class="form-label text-body-secondary mb-1">Base URL</div>
-                <code id="base-url" class="user-select-all">…</code>
-              </div>
-              <form id="settings-form" class="vstack gap-3">
-                <div>
-                  <label class="form-label" for="exposure">Сеть</label>
-                  <select id="exposure" name="exposure" class="form-select">
-                    <option value="localhost">Только этот компьютер</option>
-                    <option value="lan">Локальная сеть</option>
-                    <option value="internet">Разрешить вход из интернета</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="form-label" for="settings-exposure">Доступ к настройкам</label>
-                  <select id="settings-exposure" name="settingsExposure" class="form-select">
-                    <option value="localhost">Только этот компьютер</option>
-                    <option value="lan">Локальная сеть</option>
-                    <option value="internet">Разрешить вход из интернета</option>
-                  </select>
-                </div>
-                <p id="remote-note" class="text-body-secondary small mb-0"></p>
-                <div>
-                  <label class="form-label" for="settings-key-scope">Ключ для входа</label>
-                  <select id="settings-key-scope" name="settingsKeyScope" class="form-select">
-                    <option value="internet">Требовать только из интернета</option>
-                    <option value="lan">Требовать и из локальной сети</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="form-label" for="settings-key">Ключ настроек</label>
-                  <div class="input-group">
-                    <input id="settings-key" name="settingsKey" class="form-control" type="password" autocomplete="off" spellcheck="false">
-                    <button type="button" id="show-settings-key" class="btn btn-outline-secondary btn-icon" title="Показать" aria-label="Показать"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
-                    <button type="button" id="copy-settings-key" class="btn btn-outline-secondary btn-icon" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
-                    <button type="button" id="regenerate-settings-key" class="btn btn-outline-secondary btn-icon" title="Новый ключ" aria-label="Новый ключ"><svg viewBox="0 0 24 24"><path d="M21 4v6h-6"/><path d="M3 20v-6h6"/><path d="M20 10a8 8 0 0 0-14-3L3 10"/><path d="M4 14a8 8 0 0 0 14 3l3-3"/></svg></button>
+          <form id="settings-form" class="row g-3">
+            <div class="col-lg-6">
+              <article class="card shadow-sm h-100">
+                <div class="card-body vstack gap-3">
+                  <h2 class="h6 mb-0">Доступ</h2>
+                  <div>
+                    <div class="form-label text-body-secondary mb-1">Base URL</div>
+                    <code id="base-url" class="user-select-all">…</code>
                   </div>
-                </div>
-                <p id="settings-key-note" class="text-body-secondary small mb-0"></p>
-                <div>
-                  <label class="form-label" for="auth-mode">Ключ API</label>
-                  <select id="auth-mode" name="authMode" class="form-select">
-                    <option value="required">Требовать указанный ключ</option>
-                    <option value="optional">Без ключа или с любым ключом</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="form-label" for="api-key">Значение ключа</label>
-                  <div class="input-group">
-                    <input id="api-key" name="apiKey" class="form-control" type="password" autocomplete="off" spellcheck="false">
-                    <button type="button" id="show-key" class="btn btn-outline-secondary btn-icon" title="Показать" aria-label="Показать"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
-                    <button type="button" id="copy-key" class="btn btn-outline-secondary btn-icon" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
-                    <button type="button" id="regenerate-key" class="btn btn-outline-secondary btn-icon" title="Новый ключ" aria-label="Новый ключ"><svg viewBox="0 0 24 24"><path d="M21 4v6h-6"/><path d="M3 20v-6h6"/><path d="M20 10a8 8 0 0 0-14-3L3 10"/><path d="M4 14a8 8 0 0 0 14 3l3-3"/></svg></button>
+                  <div class="row g-3">
+                    <div class="col-md-6">
+                      <label class="form-label" for="exposure">Сеть</label>
+                      <select id="exposure" name="exposure" class="form-select">
+                        <option value="localhost">Только этот компьютер</option>
+                        <option value="lan">Локальная сеть</option>
+                        <option value="internet">Разрешить вход из интернета</option>
+                      </select>
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label" for="settings-exposure">Доступ к настройкам</label>
+                      <select id="settings-exposure" name="settingsExposure" class="form-select">
+                        <option value="localhost">Только этот компьютер</option>
+                        <option value="lan">Локальная сеть</option>
+                        <option value="internet">Разрешить вход из интернета</option>
+                      </select>
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <label class="form-label" for="port">Порт</label>
-                  <div class="input-group">
-                    <input id="port" name="port" class="form-control" inputmode="numeric" aria-describedby="port-status">
-                    <button type="button" id="apply-port" class="btn btn-primary">Применить</button>
+                  <p id="remote-note" class="text-body-secondary small mb-0"></p>
+                  <div>
+                    <label class="form-label" for="settings-key-scope">Ключ для входа</label>
+                    <select id="settings-key-scope" name="settingsKeyScope" class="form-select">
+                      <option value="internet">Требовать только из интернета</option>
+                      <option value="lan">Требовать и из локальной сети</option>
+                    </select>
                   </div>
+                  <div>
+                    <label class="form-label" for="settings-key">Ключ настроек</label>
+                    <div class="input-group">
+                      <input id="settings-key" name="settingsKey" class="form-control" type="password" autocomplete="off" spellcheck="false">
+                      <button type="button" id="show-settings-key" class="btn btn-outline-secondary btn-icon" title="Показать" aria-label="Показать"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                      <button type="button" id="copy-settings-key" class="btn btn-outline-secondary btn-icon" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
+                      <button type="button" id="regenerate-settings-key" class="btn btn-outline-secondary btn-icon" title="Новый ключ" aria-label="Новый ключ"><svg viewBox="0 0 24 24"><path d="M21 4v6h-6"/><path d="M3 20v-6h6"/><path d="M20 10a8 8 0 0 0-14-3L3 10"/><path d="M4 14a8 8 0 0 0 14 3l3-3"/></svg></button>
+                    </div>
+                  </div>
+                  <p id="settings-key-note" class="text-body-secondary small mb-0"></p>
                 </div>
-                <div class="d-flex justify-content-between align-items-center gap-3">
-                  <p class="text-body-secondary mb-0">Активные запросы: <span id="active">0</span></p>
-                  <button type="submit" class="btn btn-primary">Сохранить</button>
-                </div>
-                <p id="port-status" class="error small mb-0"></p>
-                <p id="network-note" class="text-body-secondary small mb-0"></p>
-              </form>
+              </article>
             </div>
-          </article>
+            <div class="col-lg-6">
+              <article class="card shadow-sm h-100">
+                <div class="card-body vstack gap-3">
+                  <div class="d-flex justify-content-between align-items-center gap-3">
+                    <h2 class="h6 mb-0">Ключи API</h2>
+                    <button type="button" id="add-api-key" class="btn btn-outline-secondary btn-sm">Добавить</button>
+                  </div>
+                  <div>
+                    <label class="form-label" for="api-key-scope">Когда требовать ключ</label>
+                    <select id="api-key-scope" name="apiKeyScope" class="form-select">
+                      <option value="none">Не требовать</option>
+                      <option value="internet">Требовать только из интернета</option>
+                      <option value="lan">Требовать из локальной сети и интернета</option>
+                      <option value="localhost">Требовать везде, включая этот компьютер</option>
+                    </select>
+                  </div>
+                  <p id="api-key-note" class="text-body-secondary small mb-0"></p>
+                  <div id="api-keys" class="vstack gap-2"></div>
+                </div>
+              </article>
+            </div>
+            <div class="col-12">
+              <article class="card shadow-sm">
+                <div class="card-body">
+                  <div class="row g-3 align-items-end">
+                    <div class="col-md-6">
+                      <label class="form-label" for="port">Порт</label>
+                      <div class="input-group">
+                        <input id="port" name="port" class="form-control" inputmode="numeric" aria-describedby="port-status">
+                        <button type="button" id="apply-port" class="btn btn-primary">Применить</button>
+                      </div>
+                    </div>
+                    <div class="col-md-6 d-flex justify-content-between align-items-center gap-3">
+                      <p class="text-body-secondary mb-0">Активные запросы: <span id="active">0</span></p>
+                      <button type="submit" class="btn btn-primary">Сохранить</button>
+                    </div>
+                  </div>
+                  <p id="port-status" class="error small mb-0 mt-3"></p>
+                  <p id="network-note" class="text-body-secondary small mb-0"></p>
+                </div>
+              </article>
+            </div>
+          </form>
         </section>
 
         <section id="tab-pools" class="tab">
@@ -324,10 +357,36 @@
           <div id="catalog" class="vstack gap-3"><p class="text-body-secondary">Загрузка…</p></div>
         </section>
 
+        <section id="tab-stats" class="tab">
+          <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
+            <div>
+              <h1 class="h3 mb-1">Статистика</h1>
+              <p class="text-body-secondary mb-0">Токены по фактическим моделям и оценка доли текущего лимита.</p>
+            </div>
+            <div class="d-flex flex-wrap gap-3">
+              <div>
+                <label class="form-label" for="stats-cache">Кеш</label>
+                <select id="stats-cache" class="form-select">
+                  <option value="split">Показать отдельно</option>
+                  <option value="hide">Скрыть</option>
+                  <option value="include">В составе входа</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label" for="stats-key">Фильтр</label>
+                <select id="stats-key" class="form-select"></select>
+              </div>
+            </div>
+          </div>
+          <div id="stats-charts" class="row g-3 mb-3"></div>
+          <div id="stats-table" class="vstack gap-3"></div>
+          <p class="text-body-secondary small mt-3 mb-0">Оценка по трафику шлюза: токены модели в текущем окне делятся на все наши токены этого провайдера и умножаются на занятый процент. Кеш — уже входящая часть входа; оценка лимита считает его вместе с остальным входом. Запросы в официальных приложениях сюда не входят. Старые запросы до этой правки в статистику не попадают, а кеш в ней копится только с этого учёта.</p>
+        </section>
+
         <section id="tab-docs" class="tab">
           <div class="mb-4">
             <h1 class="h3 mb-1">Документация</h1>
-            <p class="text-body-secondary mb-0">OpenAI-совместимый адрес для других программ. Если ключ обязателен, передайте его в <code>Authorization: Bearer …</code> или <code>x-api-key</code>.</p>
+            <p class="text-body-secondary mb-0">OpenAI-совместимый адрес для других программ. Подойдёт любой ключ из списка. Нужен ли он, зависит от адреса: только из интернета, ещё и из локальной сети или везде. Передайте его в <code>Authorization: Bearer …</code> или <code>x-api-key</code>.</p>
           </div>
           <div class="input-group url-line mb-4">
             <a id="docs-base" class="form-control font-monospace" href="/v1" target="_blank" rel="noopener">/v1</a>

@@ -194,3 +194,34 @@ test('local API requires its own key and records provider requests', async () =>
   assert.equal(image.status, 400)
   server.close()
 })
+
+test('journal names the API key and skips the label when no key was sent', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'sub-to-api-'))
+  const store = new Store(join(directory, 'state.json'))
+  await store.update((state) => {
+    state.settings.apiKeyScope = 'localhost'
+    state.settings.apiKeys = [{ id: 'a', label: 'Дом', key: 'one' }, { id: 'b', label: 'Ноут', key: 'two' }]
+    state.settings.apiKey = 'one'
+  })
+  const service = new GatewayService(store, new ProviderRegistry([new BaseProvider('grok', 'Grok')]))
+  const server = createAppServer(service, store)
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${server.address().port}`
+  const chat = (key) => fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { ...(key ? { authorization: `Bearer ${key}` } : {}), 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'grok/test', messages: [{ role: 'user', content: 'hello' }] }),
+  })
+  try {
+    assert.equal((await chat('two')).status, 401)
+    const named = await (await fetch(`${base}/api/journal`)).json()
+    assert.equal(named.requests[0].keyLabel, 'Ноут')
+    await store.update((state) => { state.settings.apiKeyScope = 'none' })
+    assert.equal((await chat()).status, 401)
+    const open = await (await fetch(`${base}/api/journal`)).json()
+    assert.equal(open.requests[0].keyLabel, undefined)
+    assert.equal(open.requests[1].keyLabel, 'Ноут')
+  } finally {
+    server.close()
+  }
+})

@@ -20,6 +20,7 @@ await mkdir(buildDir, { recursive: true })
 await mkdir(outputDir, { recursive: true })
 
 const esbuild = require('esbuild')
+const version = await archiveVersion()
 await esbuild.build({
   absWorkingDir: root,
   entryPoints: ['src/cli.js'],
@@ -30,6 +31,7 @@ await esbuild.build({
   target: 'node22',
   external: ['node:sea'],
   legalComments: 'none',
+  define: { __APP_VERSION__: JSON.stringify(version) },
 })
 
 const config = {
@@ -63,7 +65,6 @@ run(process.execPath, [
 run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'scripts', 'set-exe-icon.ps1'), '-Exe', executable, '-Icon', join(root, 'assets', 'icon.ico')])
 await copyFile(join(root, 'scripts', 'portable-start.bat'), join(outputDir, 'start.bat'))
 await copyFile(join(root, 'THIRD_PARTY_NOTICES.md'), join(outputDir, 'THIRD_PARTY_NOTICES.md'))
-const version = await archiveVersion()
 await writeFile(join(outputDir, 'README.txt'), `SubToAPI ${version}
 ========
 

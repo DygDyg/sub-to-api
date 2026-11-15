@@ -2,6 +2,7 @@ import { networkInterfaces } from 'node:os'
 
 export const EXPOSURES = ['localhost', 'lan', 'internet']
 export const AUTH_MODES = ['required', 'optional']
+export const API_KEY_SCOPES = ['none', 'internet', 'lan', 'localhost']
 export const SETTINGS_KEY_SCOPES = ['internet', 'lan']
 const EXPOSURE_RANK = { localhost: 0, lan: 1, internet: 2 }
 
@@ -11,6 +12,36 @@ export function normalizeExposure(value) {
 
 export function normalizeAuthMode(value) {
   return AUTH_MODES.includes(value) ? value : 'required'
+}
+
+export function apiKeyScopeOf(settings) {
+  if (API_KEY_SCOPES.includes(settings?.apiKeyScope)) return settings.apiKeyScope
+  return normalizeAuthMode(settings?.authMode) === 'optional' ? 'none' : 'localhost'
+}
+
+export function apiKeyRequired(remote, scope) {
+  const mode = API_KEY_SCOPES.includes(scope) ? scope : 'localhost'
+  if (mode === 'none') return false
+  if (mode === 'localhost') return true
+  if (isLoopback(remote)) return false
+  if (mode === 'lan') return true
+  return !isPrivate(remote)
+}
+
+export function apiKeysOf(settings) {
+  const listed = Array.isArray(settings?.apiKeys) ? settings.apiKeys : []
+  const keys = []
+  for (const item of listed) {
+    const key = String(item?.key ?? '').trim()
+    const label = String(item?.label ?? '').trim()
+    if (!key || !label) continue
+    if (keys.some((entry) => entry.key === key)) continue
+    keys.push({ id: String(item.id || ''), label: label.slice(0, 80), key })
+  }
+  if (!keys.length && String(settings?.apiKey ?? '').trim()) {
+    keys.push({ id: 'legacy', label: 'Основной', key: String(settings.apiKey).trim() })
+  }
+  return keys
 }
 
 export function normalizeSettingsKeyScope(value) {

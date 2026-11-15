@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { normalizeSettingsKeyScope, settingsExposureOf } from '../network.js'
+import { apiKeyScopeOf, apiKeysOf, normalizeSettingsKeyScope, settingsExposureOf } from '../network.js'
 import { chooseMember, estimateTokens, fitsContext, normalizePool, remainingPercent } from '../pools.js'
 import { priceEstimate, requestCost } from '../pricing.js'
+import { buildStats, recordUsage } from '../stats.js'
 import { LAST_REQUEST_PATH } from '../storage/store.js'
 import { writeFile } from 'node:fs/promises'
 
@@ -39,6 +40,8 @@ export class GatewayService {
         port: state.settings.port,
         exposure: state.settings.exposure || 'localhost',
         authMode: state.settings.authMode || 'required',
+        apiKeyScope: apiKeyScopeOf(state.settings),
+        apiKeys: apiKeysOf(state.settings),
         settingsExposure: settingsExposureOf(state.settings),
         settingsKey: state.settings.settingsKey || '',
         settingsKeyScope: normalizeSettingsKeyScope(state.settings.settingsKeyScope),
@@ -54,6 +57,12 @@ export class GatewayService {
 
   async journal() {
     return { requests: loggedRequests(await this.store.read()) }
+  }
+
+  async stats(signal, key) {
+    const state = await this.store.read()
+    const usage = await this.usageAll(signal, false).catch(() => ({ providers: [] }))
+    return buildStats(state.usageStats, usage.providers ?? [], { key })
   }
 
   /** @param {string} provider @param {any} input */
@@ -435,6 +444,7 @@ export class GatewayService {
         started,
         durationMs: Date.now() - started,
         status,
+        ...(request.keyLabel ? { keyLabel: request.keyLabel } : {}),
         ...(error ? { error: error.slice(0, 300) } : {}),
         request: clip(request.messages.map(messageText).filter(Boolean).join('\n\n')),
         response: clip(answer.join('')),
@@ -448,6 +458,15 @@ export class GatewayService {
         await writeFile(LAST_REQUEST_PATH, `id: ${id}\nmodel: ${route.publicModel}\nstatus: ${status}\n\n===== ЗАПРОС =====\n${requestText}\n\n===== ОТВЕТ =====\n${responseText}\n`, 'utf8')
       } else delete state.lastExchange
       state.requests = state.requests.slice(0, state.settings.requestLogLimit ?? 200)
+      state.usageStats = recordUsage(state.usageStats, {
+        model: route.publicModel,
+        provider: route.adapter.id,
+        keyLabel: request.keyLabel || '',
+        input: inputTokens,
+        output: outputTokens,
+        cacheRead: cacheReadTokens,
+        cacheWrite: cacheWriteTokens,
+      })
     }).catch(() => undefined)
   }
 }

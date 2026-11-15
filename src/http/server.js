@@ -5,7 +5,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isSea, getAsset } from 'node:sea'
 import { chatCompletionToCanonical, collectChatCompletion, writeChatStream } from '../openai/translate.js'
-import { allowedByExposure, canReachSettings, hostFor, lanAddresses, normalizeAuthMode, normalizeExposure, normalizeSettingsKeyScope, settingsExposureOf, settingsKeyMustBeSet, settingsKeyRequired, widerExposure } from '../network.js'
+import { APP_VERSION } from '../version.js'
+import { API_KEY_SCOPES, allowedByExposure, apiKeyRequired, apiKeyScopeOf, apiKeysOf, canReachSettings, hostFor, lanAddresses, normalizeExposure, normalizeSettingsKeyScope, settingsExposureOf, settingsKeyMustBeSet, settingsKeyRequired, widerExposure } from '../network.js'
 
 /**
  * @param {import('../gateway/service.js').GatewayService} service
@@ -57,15 +58,20 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
     overview.settings.settingsKeyScope = normalizeSettingsKeyScope(runtime.settingsKeyScope)
     overview.settings.url = `http://127.0.0.1:${runtime.port}`
     overview.settings.lanAddresses = lanAddresses()
+    overview.version = APP_VERSION
     return send(response, 200, overview)
   }
   if (request.method === 'GET' && url.pathname === '/api/journal') return send(response, 200, await service.journal())
+  if (request.method === 'GET' && url.pathname === '/api/stats') {
+    const key = url.searchParams.has('key') ? url.searchParams.get('key') ?? '' : undefined
+    return send(response, 200, await service.stats(request.signal, key))
+  }
   if (request.method === 'POST' && url.pathname === '/api/settings') {
     const body = await readJson(request)
     const current = await store.read()
     const port = body.port === undefined ? runtime.port : Number(body.port)
     const exposure = body.exposure === undefined ? normalizeExposure(current.settings.exposure) : normalizeExposure(body.exposure)
-    const authMode = body.authMode === undefined ? normalizeAuthMode(current.settings.authMode) : normalizeAuthMode(body.authMode)
+    const apiKeyScope = resolveApiKeyScope(body, current.settings)
     const settingsExposure = body.settingsExposure === undefined ? settingsExposureOf(current.settings) : normalizeExposure(body.settingsExposure)
     const settingsKeyScope = body.settingsKeyScope === undefined ? normalizeSettingsKeyScope(current.settings.settingsKeyScope) : normalizeSettingsKeyScope(body.settingsKeyScope)
     if (body.exposure !== undefined && !['localhost', 'lan', 'internet'].includes(body.exposure)) {
@@ -77,6 +83,9 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
     if (body.authMode !== undefined && !['required', 'optional'].includes(body.authMode)) {
       throw Object.assign(new Error('Неизвестный режим ключа'), { status: 400 })
     }
+    if (body.apiKeyScope !== undefined && !API_KEY_SCOPES.includes(body.apiKeyScope)) {
+      throw Object.assign(new Error('Неизвестный режим ключа API'), { status: 400 })
+    }
     if (body.settingsKeyScope !== undefined && !['internet', 'lan'].includes(body.settingsKeyScope)) {
       throw Object.assign(new Error('Неизвестный режим ключа настроек'), { status: 400 })
     }
@@ -87,14 +96,13 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
     if (port !== runtime.port && !await portAvailable(port, host)) {
       throw Object.assign(new Error(`Порт ${port} уже занят`), { status: 409 })
     }
-    let apiKey = current.settings.apiKey
-    if (body.regenerateKey) apiKey = `sta_${randomUUID().replaceAll('-', '')}`
-    else if (typeof body.apiKey === 'string' && body.apiKey.trim()) apiKey = body.apiKey.trim()
+    const apiKeys = resolveApiKeys(body, current.settings)
+    const apiKey = apiKeys[0]?.key ?? ''
     let settingsKey = current.settings.settingsKey || ''
     if (body.regenerateSettingsKey) settingsKey = `set_${randomUUID().replaceAll('-', '')}`
     else if (typeof body.settingsKey === 'string' && body.settingsKey.trim()) settingsKey = body.settingsKey.trim()
-    if (authMode === 'required' && !apiKey) {
-      throw Object.assign(new Error('Для обязательного ключа укажите значение'), { status: 400 })
+    if (apiKeyScope !== 'none' && !apiKeys.length) {
+      throw Object.assign(new Error('Укажите хотя бы один ключ API'), { status: 400 })
     }
     if (settingsKeyMustBeSet(settingsExposure, settingsKeyScope) && !settingsKey) {
       throw Object.assign(new Error('Укажите ключ для входа в настройки'), { status: 400 })
@@ -103,7 +111,9 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
       state.settings.port = port
       state.settings.host = host
       state.settings.exposure = exposure
-      state.settings.authMode = authMode
+      state.settings.authMode = apiKeyScope === 'none' ? 'optional' : 'required'
+      state.settings.apiKeyScope = apiKeyScope
+      state.settings.apiKeys = apiKeys
       state.settings.settingsExposure = settingsExposure
       state.settings.settingsKey = settingsKey
       state.settings.settingsKeyScope = settingsKeyScope
@@ -118,7 +128,7 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
     runtime.settingsKeyScope = settingsKeyScope
     const urlAfter = `http://127.0.0.1:${port}/`
     if (port !== runtime.port || host !== runtime.host) response.once('finish', () => hooks.rebind?.({ port, host, exposure }))
-    return send(response, 200, { port, host, exposure, authMode, settingsExposure, settingsKey, settingsKeyScope, apiKey, saveFullRequest: Boolean(current.settings.saveFullRequest || body.saveFullRequest), url: urlAfter })
+    return send(response, 200, { port, host, exposure, authMode: apiKeyScope === 'none' ? 'optional' : 'required', apiKeyScope, apiKeys, settingsExposure, settingsKey, settingsKeyScope, apiKey, saveFullRequest: Boolean(current.settings.saveFullRequest || body.saveFullRequest), url: urlAfter })
   }
   if (request.method === 'GET' && url.pathname === '/api/pools') return send(response, 200, await service.pools())
   if (request.method === 'POST' && url.pathname === '/api/pools') return send(response, 200, await service.savePool(await readJson(request)))
@@ -163,7 +173,8 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
 
 async function handleOpenAI(service, store, url, request, response) {
   const state = await store.read()
-  if (!authorized(request, state.settings)) {
+  const auth = authorizeApi(request, state.settings)
+  if (!auth.ok) {
     response.setHeader('www-authenticate', 'Bearer')
     return send(response, 401, { error: { message: 'Invalid API key', type: 'authentication_error' } })
   }
@@ -174,6 +185,7 @@ async function handleOpenAI(service, store, url, request, response) {
   if (request.method === 'GET' && video) return send(response, 200, await service.videoStatus(decodeURIComponent(video[1]), request.signal))
   if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
     const canonical = chatCompletionToCanonical(await readJson(request), request.headers)
+    if (auth.label) canonical.keyLabel = auth.label
     const events = service.stream(canonical)
     if (canonical.stream) return writeChatStream(response, canonical.model, events)
     return send(response, 200, await collectChatCompletion(canonical.model, events))
@@ -224,11 +236,56 @@ function isAdminPath(pathname) {
   return Boolean(staticPage(pathname)) || pathname.startsWith('/api/')
 }
 
-function authorized(request, settings) {
-  if (normalizeAuthMode(settings.authMode) === 'optional') return true
+function authorizeApi(request, settings) {
+  const presented = presentedApiKey(request)
+  const match = presented ? apiKeysOf(settings).find((item) => keyMatches(item.key, presented)) : undefined
+  if (!apiKeyRequired(request.socket.remoteAddress, apiKeyScopeOf(settings))) return { ok: true, label: match?.label ?? '' }
+  return match ? { ok: true, label: match.label } : { ok: false, label: '' }
+}
+
+function presentedApiKey(request) {
   const header = request.headers.authorization ?? ''
+  if (header.startsWith('Bearer ')) return header.slice('Bearer '.length)
   const apiKey = request.headers['x-api-key']
-  return Boolean(settings.apiKey) && (header === `Bearer ${settings.apiKey}` || apiKey === settings.apiKey)
+  return Array.isArray(apiKey) ? apiKey[0] : apiKey
+}
+
+function resolveApiKeyScope(body, settings) {
+  if (body.apiKeyScope !== undefined) return API_KEY_SCOPES.includes(body.apiKeyScope) ? body.apiKeyScope : apiKeyScopeOf(settings)
+  if (body.authMode !== undefined) return body.authMode === 'optional' ? 'none' : 'localhost'
+  return apiKeyScopeOf(settings)
+}
+
+function resolveApiKeys(body, settings) {
+  if (Array.isArray(body.apiKeys)) return normalizeApiKeys(body.apiKeys)
+  const keys = apiKeysOf(settings).map((item) => ({ ...item, id: item.id || randomUUID() }))
+  if (body.regenerateKey) {
+    const key = `sta_${randomUUID().replaceAll('-', '')}`
+    if (keys[0]) keys[0] = { ...keys[0], key }
+    else keys.push({ id: randomUUID(), label: 'Основной', key })
+  } else if (typeof body.apiKey === 'string' && body.apiKey.trim()) {
+    const key = body.apiKey.trim()
+    if (keys[0]) keys[0] = { ...keys[0], key }
+    else keys.push({ id: randomUUID(), label: 'Основной', key })
+  }
+  return keys
+}
+
+function normalizeApiKeys(input) {
+  if (input.length > 30) throw Object.assign(new Error('Ключей API не больше 30'), { status: 400 })
+  const keys = []
+  for (const item of input) {
+    const label = String(item?.label ?? '').trim()
+    const key = String(item?.key ?? '').trim()
+    if (!label) throw Object.assign(new Error('У каждого ключа нужна подпись'), { status: 400 })
+    if (!key) throw Object.assign(new Error('У каждого ключа нужно значение'), { status: 400 })
+    if (label.length > 80) throw Object.assign(new Error('Подпись ключа не длиннее 80 символов'), { status: 400 })
+    if (key.length > 200) throw Object.assign(new Error('Ключ не длиннее 200 символов'), { status: 400 })
+    if (keys.some((entry) => entry.key === key)) throw Object.assign(new Error('Ключи не должны повторяться'), { status: 400 })
+    const id = /^[A-Za-z0-9_-]{1,40}$/.test(String(item?.id ?? '')) ? String(item.id) : randomUUID()
+    keys.push({ id, label, key })
+  }
+  return keys
 }
 
 async function serveStatic(name, response) {

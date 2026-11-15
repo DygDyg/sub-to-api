@@ -1,8 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createServer } from 'node:net'
 import { createAppServer } from '../src/http/server.js'
-import { canReachSettings, settingsKeyMustBeSet, settingsKeyRequired } from '../src/network.js'
+import { apiKeyRequired, canReachSettings, settingsKeyMustBeSet, settingsKeyRequired } from '../src/network.js'
+import { Store } from '../src/storage/store.js'
 
 test('settings exposure matches network zones and keeps the legacy switch', () => {
   assert.equal(canReachSettings('8.8.8.8', { remoteSettings: true }), false)
@@ -26,6 +30,54 @@ test('settings key is skipped on this computer and optional on the local network
   assert.equal(settingsKeyMustBeSet('lan', 'lan'), true)
   assert.equal(settingsKeyMustBeSet('lan', 'internet'), false)
   assert.equal(settingsKeyMustBeSet('localhost', 'lan'), false)
+})
+
+test('old optional mode stays open when the zone was never saved', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'sub-to-api-'))
+  const path = join(directory, 'state.json')
+  await writeFile(path, JSON.stringify({ settings: { authMode: 'optional', apiKey: 'legacy' } }))
+  const settings = (await new Store(path).read()).settings
+  assert.equal(settings.apiKeyScope, 'none')
+  await writeFile(path, JSON.stringify({ settings: { authMode: 'required', apiKey: 'legacy' } }))
+  assert.equal((await new Store(path).read()).settings.apiKeyScope, 'localhost')
+})
+
+test('API key is required by zone, not by a single global switch', () => {
+  assert.equal(apiKeyRequired('8.8.8.8', 'internet'), true)
+  assert.equal(apiKeyRequired('192.168.1.20', 'internet'), false)
+  assert.equal(apiKeyRequired('127.0.0.1', 'internet'), false)
+  assert.equal(apiKeyRequired('192.168.1.20', 'lan'), true)
+  assert.equal(apiKeyRequired('8.8.8.8', 'lan'), true)
+  assert.equal(apiKeyRequired('127.0.0.1', 'lan'), false)
+  assert.equal(apiKeyRequired('127.0.0.1', 'localhost'), true)
+  assert.equal(apiKeyRequired('8.8.8.8', 'none'), false)
+})
+
+test('API key list rejects an empty required set and accepts a second key', async () => {
+  const state = { settings: { port: 8787, exposure: 'localhost', authMode: 'required', apiKey: 'one', apiKeyScope: 'localhost', apiKeys: [{ id: 'a', label: 'Дом', key: 'one' }] } }
+  const store = { read: async () => structuredClone(state), update: async fn => fn(state) }
+  const runtime = { host: '127.0.0.1', port: 0, exposure: 'localhost', settingsExposure: 'localhost' }
+  const server = createAppServer({ models: async () => ({ data: [] }) }, store, runtime, {})
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  runtime.port = server.address().port
+  const post = body => fetch(`http://127.0.0.1:${runtime.port}/api/settings`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  const models = (key) => fetch(`http://127.0.0.1:${runtime.port}/v1/models`, { headers: key ? { authorization: `Bearer ${key}` } : {} })
+  try {
+    assert.equal((await post({ apiKeyScope: 'localhost', apiKeys: [] })).status, 400)
+    assert.equal(state.settings.apiKeys.length, 1)
+    assert.equal((await post({ apiKeys: [{ label: 'Дом', key: 'one' }, { label: 'Дом', key: 'one' }] })).status, 400)
+    assert.equal((await post({ apiKeyScope: 'internet', apiKeys: [{ id: 'a', label: 'Дом', key: 'one' }, { id: 'b', label: 'Ноут', key: 'two' }] })).status, 200)
+    assert.equal((await models()).status, 200)
+    assert.equal((await models('two')).status, 200)
+    assert.equal((await models('nope')).status, 200)
+    state.settings.apiKeyScope = 'localhost'
+    assert.equal((await models()).status, 401)
+    assert.equal((await models('two')).status, 200)
+    assert.equal((await models('nope')).status, 401)
+  } finally {
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+  }
 })
 
 test('opening settings beyond this computer requires a key when that zone asks for one', async () => {

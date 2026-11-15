@@ -1,4 +1,4 @@
-const tabNames = { home: 'Главная', settings: 'Настройки', models: 'Модели', pools: 'Пулы', journal: 'Журнал', docs: 'Документация' }
+const tabNames = { home: 'Главная', settings: 'Настройки', models: 'Модели', pools: 'Пулы', journal: 'Журнал', stats: 'Статистика', docs: 'Документация' }
 const providers = document.querySelector('#providers')
 let poolCatalog = []
 let poolMembers = []
@@ -46,6 +46,7 @@ function showTab(name) {
   if (!journalWatch) setPending(0)
   if (name === 'models') loadCatalog(false)
   if (name === 'pools') loadPools()
+  if (name === 'stats') loadStats()
   if (journalWatch) refreshJournal()
 }
 
@@ -71,23 +72,25 @@ async function load({ refreshUsage = false } = {}) {
   setLink('#link-images', `${base}/images/generations`)
   setLink('#link-videos', `${base}/videos`)
   setLink('#link-usage', `${origin}/api/usage`)
-  document.querySelector('#curl-example').textContent = curlExample(base, overview.settings.apiKey)
+  document.querySelector('#curl-example').textContent = curlExample(base, overview.settings.apiKeys?.[0]?.key || overview.settings.apiKey)
   document.querySelector('#port').value = overview.settings.port
   document.querySelector('#exposure').value = overview.settings.exposure || 'localhost'
-  document.querySelector('#auth-mode').value = overview.settings.authMode || 'required'
+  document.querySelector('#api-key-scope').value = overview.settings.apiKeyScope || 'localhost'
+  renderApiKeys(overview.settings.apiKeys ?? [])
   document.querySelector('#settings-exposure').value = overview.settings.settingsExposure || 'localhost'
   document.querySelector('#settings-key-scope').value = overview.settings.settingsKeyScope || 'internet'
   document.querySelector('#settings-key').value = overview.settings.settingsKey || ''
-  document.querySelector('#api-key').value = overview.settings.apiKey || ''
   const saveFull = document.querySelector('#save-full')
   saveFull.checked = Boolean(overview.settings.saveFullRequest)
   if (seq === journalSeq) syncJournal(overview.requests)
   document.querySelector('#network-note').textContent = networkNote(overview.settings)
   syncSettingsAccess()
+  syncApiKeyScope()
   if (overview.settings.effectivePort && overview.settings.effectivePort !== overview.settings.port) {
     document.querySelector('#port-status').textContent = `Сейчас открыт ${overview.settings.effectivePort}: порт ${overview.settings.port} занят.`
   }
   document.querySelector('#active').textContent = String(overview.activeRequests)
+  document.querySelector('#app-version').textContent = overview.version ? `v${overview.version}` : ''
   const open = new Set(JSON.parse(localStorage.getItem('provider-open') || '[]'))
   const connected = overview.providers.filter((provider) => provider.accounts.length)
   const available = overview.providers.filter((provider) => !provider.accounts.length)
@@ -102,6 +105,7 @@ async function load({ refreshUsage = false } = {}) {
       fillModels(card, connected[index], refreshUsage),
     ])),
   ])
+  if (document.querySelector('#tab-stats')?.classList.contains('active')) loadStats().catch(() => undefined)
 }
 
 function requestKey(request) {
@@ -203,7 +207,8 @@ function row(request) {
   ].filter(Boolean)
   const kind = request.status === 'ok' ? 'ok' : 'error'
   const badge = kind === 'ok' ? 'text-bg-success' : 'text-bg-danger'
-  card.innerHTML = `<summary class="card-header d-flex align-items-center gap-2"><code>${escape(request.model || '—')}</code><span class="text-body-secondary small ms-auto">${new Date(request.started).toLocaleString()}</span><span class="badge ${badge}">${escape(request.status || 'ошибка')}</span></summary><div class="card-body vstack gap-2">${request.error ? `<p class="error mb-0">${escape(request.error)}</p>` : ''}${facts.length ? `<p class="text-body-secondary small mb-0">${escape(facts.join(' · '))}</p>` : ''}${request.request ? `<strong>Запрос</strong><pre>${escape(request.request)}</pre>` : '<p class="text-body-secondary mb-0">Текст этого запроса не сохранён</p>'}${request.response ? `<strong>Ответ</strong><pre>${escape(request.response)}</pre>` : ''}</div>`
+  const keyName = request.keyLabel ? ` (${request.keyLabel})` : ''
+  card.innerHTML = `<summary class="card-header d-flex align-items-center gap-2"><code>${escape(request.model || '—')}${escape(keyName)}</code><span class="text-body-secondary small ms-auto">${new Date(request.started).toLocaleString()}</span><span class="badge ${badge}">${escape(request.status || 'ошибка')}</span></summary><div class="card-body vstack gap-2">${request.error ? `<p class="error mb-0">${escape(request.error)}</p>` : ''}${facts.length ? `<p class="text-body-secondary small mb-0">${escape(facts.join(' · '))}</p>` : ''}${request.request ? `<strong>Запрос</strong><pre>${escape(request.request)}</pre>` : '<p class="text-body-secondary mb-0">Текст этого запроса не сохранён</p>'}${request.response ? `<strong>Ответ</strong><pre>${escape(request.response)}</pre>` : ''}</div>`
   return card
 }
 
@@ -629,6 +634,76 @@ document.querySelector('#settings-exposure').onchange = syncSettingsAccess
 document.querySelector('#settings-key-scope').onchange = syncSettingsAccess
 document.querySelector('#settings-key').oninput = syncSettingsAccess
 
+function apiKeyScopeNote(scope) {
+  if (scope === 'none') return 'Ключ API не спрашивается ни с этого компьютера, ни из сети.'
+  if (scope === 'internet') return 'Ключ нужен только из интернета. На этом компьютере и в локальной сети запрос проходит без него.'
+  if (scope === 'lan') return 'Ключ нужен из локальной сети и из интернета. На этом компьютере не спрашивается.'
+  return 'Ключ нужен отовсюду, включая этот компьютер. Подойдёт любой ключ из списка.'
+}
+
+function syncApiKeyScope() {
+  const scope = document.querySelector('#api-key-scope').value
+  const missing = scope !== 'none' && !document.querySelector('#api-keys').children.length
+  document.querySelector('#api-key-note').textContent = missing
+    ? 'Добавьте хотя бы один ключ: без него такой режим не сохранится.'
+    : apiKeyScopeNote(scope)
+}
+document.querySelector('#api-key-scope').onchange = syncApiKeyScope
+
+function newId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(8))
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function newApiKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return `sta_${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
+function renderApiKeys(keys) {
+  document.querySelector('#api-keys').replaceChildren(...keys.map((item) => apiKeyRow(item)))
+  syncApiKeyScope()
+}
+
+function apiKeyRow(item) {
+  const row = document.createElement('div')
+  row.className = 'settings-key'
+  row.dataset.id = item.id || newId()
+  row.innerHTML = `<input class="form-control" data-label placeholder="Для кого" maxlength="80" autocomplete="off" value="${escape(item.label || '')}"><div class="input-group"><input class="form-control" data-key type="password" autocomplete="off" spellcheck="false" value="${escape(item.key || '')}"><button type="button" class="btn btn-outline-secondary btn-icon" data-show title="Показать" aria-label="Показать"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button><button type="button" class="btn btn-outline-secondary btn-icon" data-copy title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button><button type="button" class="btn btn-outline-secondary btn-icon" data-new title="Новый ключ" aria-label="Новый ключ"><svg viewBox="0 0 24 24"><path d="M21 4v6h-6"/><path d="M3 20v-6h6"/><path d="M20 10a8 8 0 0 0-14-3L3 10"/><path d="M4 14a8 8 0 0 0 14 3l3-3"/></svg></button><button type="button" class="btn btn-outline-secondary btn-icon" data-remove title="Удалить" aria-label="Удалить"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`
+  row.querySelector('[data-show]').onclick = () => {
+    const input = row.querySelector('[data-key]')
+    const button = row.querySelector('[data-show]')
+    const hidden = input.type === 'password'
+    input.type = hidden ? 'text' : 'password'
+    button.title = hidden ? 'Скрыть' : 'Показать'
+    button.setAttribute('aria-label', button.title)
+  }
+  row.querySelector('[data-copy]').onclick = async () => {
+    await navigator.clipboard.writeText(row.querySelector('[data-key]').value)
+    document.querySelector('#port-status').textContent = 'Ключ скопирован'
+  }
+  row.querySelector('[data-new]').onclick = () => {
+    row.querySelector('[data-key]').value = newApiKey()
+  }
+  row.querySelector('[data-remove]').onclick = () => {
+    row.remove()
+    syncApiKeyScope()
+  }
+  return row
+}
+
+function collectApiKeys() {
+  return [...document.querySelectorAll('#api-keys > div')].map((row) => ({
+    id: row.dataset.id,
+    label: row.querySelector('[data-label]').value.trim(),
+    key: row.querySelector('[data-key]').value.trim(),
+  }))
+}
+document.querySelector('#add-api-key').onclick = () => {
+  document.querySelector('#api-keys').append(apiKeyRow({ id: newId(), label: '', key: newApiKey() }))
+  syncApiKeyScope()
+}
+
 function bindReveal(inputId, buttonId) {
   document.querySelector(buttonId).onclick = () => {
     const input = document.querySelector(inputId)
@@ -639,26 +714,10 @@ function bindReveal(inputId, buttonId) {
     button.setAttribute('aria-label', button.title)
   }
 }
-bindReveal('#api-key', '#show-key')
 bindReveal('#settings-key', '#show-settings-key')
-document.querySelector('#copy-key').onclick = async () => {
-  await navigator.clipboard.writeText(document.querySelector('#api-key').value)
-  document.querySelector('#port-status').textContent = 'Ключ скопирован'
-}
 document.querySelector('#copy-settings-key').onclick = async () => {
   await navigator.clipboard.writeText(document.querySelector('#settings-key').value)
   document.querySelector('#port-status').textContent = 'Ключ настроек скопирован'
-}
-document.querySelector('#regenerate-key').onclick = async () => {
-  const status = document.querySelector('#port-status')
-  status.textContent = 'Создаю ключ…'
-  try {
-    const saved = await api('/api/settings', { method: 'POST', body: JSON.stringify({ regenerateKey: true }) })
-    document.querySelector('#api-key').value = saved.apiKey
-    status.textContent = 'Новый ключ сохранён'
-  } catch (error) {
-    status.textContent = error.message
-  }
 }
 document.querySelector('#regenerate-settings-key').onclick = async () => {
   const status = document.querySelector('#port-status')
@@ -892,11 +951,11 @@ document.querySelector('#settings-form').onsubmit = async (event) => {
       method: 'POST',
       body: JSON.stringify({
         exposure: form.get('exposure'),
-        authMode: form.get('authMode'),
+        apiKeyScope: form.get('apiKeyScope'),
+        apiKeys: collectApiKeys(),
         settingsExposure: form.get('settingsExposure'),
         settingsKeyScope: form.get('settingsKeyScope'),
         settingsKey: form.get('settingsKey'),
-        apiKey: form.get('apiKey'),
       }),
     })
     status.textContent = 'Сохранено'
@@ -905,6 +964,198 @@ document.querySelector('#settings-form').onsubmit = async (event) => {
   } catch (error) {
     status.textContent = error.message
   }
+}
+
+let statsPayload = null
+
+async function loadStats() {
+  const select = document.querySelector('#stats-key')
+  const chosen = select.value
+  const query = chosen && chosen !== '*' ? `?key=${encodeURIComponent(chosen === '-' ? '' : chosen)}` : ''
+  const stats = await api(`/api/stats${query}`)
+  const options = ['<option value="*">Общий</option>']
+  if (stats.anonymous) options.push('<option value="-">Без ключа</option>')
+  for (const key of stats.keys ?? []) options.push(`<option value="${escape(key)}">${escape(key)}</option>`)
+  select.innerHTML = options.join('')
+  const next = [...select.options].some((option) => option.value === chosen) ? chosen : '*'
+  select.value = next
+  statsPayload = stats
+  renderStats(stats)
+}
+
+function renderStats(stats) {
+  const charts = document.querySelector('#stats-charts')
+  const table = document.querySelector('#stats-table')
+  if (!stats.models?.length) {
+    charts.replaceChildren()
+    table.innerHTML = '<p class="text-body-secondary mb-0">Пока нет запросов. Цифры появятся после первых вызовов.</p>'
+    return
+  }
+  const mode = cacheMode()
+  charts.innerHTML = statsCharts(stats.models, mode)
+  table.innerHTML = statsTable(stats.models, mode)
+}
+
+function cacheMode() {
+  const mode = document.querySelector('#stats-cache').value
+  return mode === 'hide' || mode === 'include' ? mode : 'split'
+}
+
+function freshInput(model) {
+  return Math.max(0, (model.input || 0) - (model.cacheRead || 0) - (model.cacheWrite || 0))
+}
+
+function viewTotal(model, mode) {
+  if (mode === 'hide') return freshInput(model) + (model.output || 0)
+  return (model.input || 0) + (model.output || 0)
+}
+
+function statsTable(models, mode) {
+  const cacheHead = mode === 'split' ? '<th class="text-end">Кеш</th>' : ''
+  const rows = models.map((model) => {
+    const input = mode === 'include' ? model.input : freshInput(model)
+    const cacheCell = mode === 'split' ? `<td class="text-end">${cacheCellText(model)}</td>` : ''
+    return `<tr><td><code>${escape(model.model)}</code></td><td class="text-end">${formatTokens(input)}</td>${cacheCell}<td class="text-end">${formatTokens(model.output)}</td><td class="text-end">${formatTokens(viewTotal(model, mode))}</td><td>${limitCell(model.windows)}</td></tr>`
+  }).join('')
+  return `<div class="table-responsive card shadow-sm"><table class="table align-middle mb-0"><thead><tr><th>Модель</th><th class="text-end">Вход</th>${cacheHead}<th class="text-end">Выход</th><th class="text-end">Всего</th><th>Лимит</th></tr></thead><tbody>${rows}</tbody></table></div>`
+}
+
+function cacheCellText(model) {
+  const read = model.cacheRead || 0
+  const write = model.cacheWrite || 0
+  if (!read && !write) return '0'
+  return write ? `${formatTokens(read)} · зап. ${formatTokens(write)}` : formatTokens(read)
+}
+
+document.querySelector('#stats-key').onchange = () => loadStats().catch((error) => {
+  document.querySelector('#stats-charts').replaceChildren()
+  document.querySelector('#stats-table').textContent = error.message
+})
+document.querySelector('#stats-cache').onchange = () => {
+  localStorage.setItem('stats-cache', document.querySelector('#stats-cache').value)
+  if (statsPayload) renderStats(statsPayload)
+}
+const savedCacheMode = localStorage.getItem('stats-cache')
+if (savedCacheMode) document.querySelector('#stats-cache').value = savedCacheMode
+
+const chartColors = ['#0d6efd', '#198754', '#fd7e14', '#6f42c1', '#d63384', '#20c997', '#ffc107', '#dc3545']
+
+function statsCharts(models, mode) {
+  return `${chartCard('Доля токенов', shareChart(models, mode), 'col-12')}${chartCard('Вход и выход', barChart(models, mode), 'col-12')}${limitChart(models)}`
+}
+
+function chartCard(title, body, width) {
+  return `<div class="${width}"><article class="card shadow-sm"><div class="card-body"><h2 class="h6">${title}</h2>${body}</div></article></div>`
+}
+
+function chartSlices(models, mode) {
+  const ranked = models.map((model) => ({ ...model, total: viewTotal(model, mode) })).sort((left, right) => right.total - left.total)
+  const head = ranked.slice(0, 7)
+  const rest = ranked.slice(7).reduce((sum, model) => sum + model.total, 0)
+  const slices = head.map((model, index) => ({ label: model.model, total: model.total, color: chartColors[index % chartColors.length] }))
+  if (rest) slices.push({ label: 'Остальные', total: rest, color: '#6c757d' })
+  return slices.filter((slice) => slice.total > 0)
+}
+
+function shareChart(models, mode) {
+  const slices = chartSlices(models, mode)
+  const total = slices.reduce((sum, slice) => sum + slice.total, 0)
+  if (!total) return `<p class="text-body-secondary mb-0">${mode === 'hide' ? 'Без кеша токенов пока нет.' : 'Токенов пока нет.'}</p>`
+  const bar = slices.map((slice) => `<span style="width:${(slice.total / total) * 100}%;background:${slice.color}" title="${escape(slice.label)}: ${formatTokens(slice.total)}"></span>`).join('')
+  const legend = slices.map((slice) => `<span class="small"><i class="stats-swatch" style="background:${slice.color}"></i> ${escape(slice.label)} · ${Math.round((slice.total / total) * 100)}%</span>`).join('')
+  const composition = mode === 'split' ? compositionChart(models) : ''
+  return `<div class="stats-share" role="img" aria-label="Доля токенов по моделям">${bar}</div><div class="stats-legend mt-2">${legend}</div>${composition}`
+}
+
+function compositionChart(models) {
+  const parts = [
+    { label: 'Новый вход', total: models.reduce((sum, model) => sum + freshInput(model), 0), color: '#0d6efd' },
+    { label: 'Кеш', total: models.reduce((sum, model) => sum + (model.cacheRead || 0), 0), color: '#20c997' },
+    { label: 'Запись кеша', total: models.reduce((sum, model) => sum + (model.cacheWrite || 0), 0), color: '#6f42c1' },
+    { label: 'Выход', total: models.reduce((sum, model) => sum + (model.output || 0), 0), color: '#fd7e14' },
+  ].filter((part) => part.total > 0)
+  const cached = parts.some((part) => part.label === 'Кеш' || part.label === 'Запись кеша')
+  if (!cached) return '<p class="text-body-secondary small mb-0 mt-3">Кеша в накопленной статистике пока нет. Он появится в новых запросах.</p>'
+  const total = parts.reduce((sum, part) => sum + part.total, 0)
+  const bar = parts.map((part) => `<span style="width:${(part.total / total) * 100}%;background:${part.color}" title="${escape(part.label)}: ${formatTokens(part.total)}"></span>`).join('')
+  const legend = parts.map((part) => `<span class="small"><i class="stats-swatch" style="background:${part.color}"></i> ${part.label} · ${Math.round((part.total / total) * 100)}%</span>`).join('')
+  return `<p class="small text-body-secondary mb-1 mt-3">Состав</p><div class="stats-share" role="img" aria-label="Состав токенов">${bar}</div><div class="stats-legend mt-2">${legend}</div>`
+}
+
+function barChart(models, mode) {
+  const rows = [...models].sort((left, right) => viewTotal(right, mode) - viewTotal(left, mode)).slice(0, 8)
+  const max = Math.max(...rows.map((model) => Math.max(mode === 'hide' ? freshInput(model) : model.input, model.output)), 1)
+  const width = 420
+  const label = 132
+  const bar = width - label - 8
+  const height = rows.length * 36 + 8
+  const marks = rows.map((model, index) => {
+    const y = index * 36 + 8
+    const output = Math.max(model.output ? 1 : 0, (model.output / max) * bar)
+    return `<text x="0" y="${y + 14}" font-size="11" fill="currentColor">${escape(shortModel(model.model))}</text>${inputMarks(model, mode, label, y, bar, max)}<rect x="${label}" y="${y + 14}" width="${output}" height="10" rx="2" fill="#fd7e14"><title>Выход ${formatTokens(model.output)}</title></rect>`
+  }).join('')
+  return `<svg class="stats-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Вход и выход токенов">${marks}</svg><div class="stats-legend mt-2">${barLegend(mode, rows)}</div>`
+}
+
+function inputMarks(model, mode, x, y, bar, max) {
+  if (mode !== 'split') {
+    const input = mode === 'hide' ? freshInput(model) : model.input
+    const width = Math.max(input ? 1 : 0, (input / max) * bar)
+    const title = mode === 'hide' ? 'Вход без кеша' : 'Вход'
+    return `<rect x="${x}" y="${y}" width="${width}" height="10" rx="2" fill="#0d6efd"><title>${title} ${formatTokens(input)}</title></rect>`
+  }
+  const parts = [
+    { value: freshInput(model), color: '#0d6efd', title: 'Новый вход' },
+    { value: model.cacheRead || 0, color: '#20c997', title: 'Кеш' },
+    { value: model.cacheWrite || 0, color: '#6f42c1', title: 'Запись кеша' },
+  ].filter((part) => part.value > 0)
+  let cursor = x
+  return parts.map((part) => {
+    const width = Math.max(1, (part.value / max) * bar)
+    const mark = `<rect x="${cursor}" y="${y}" width="${width}" height="10" rx="2" fill="${part.color}"><title>${part.title} ${formatTokens(part.value)}</title></rect>`
+    cursor += width
+    return mark
+  }).join('')
+}
+
+function barLegend(mode, rows) {
+  const items = [`<span class="small"><i class="stats-swatch" style="background:#0d6efd"></i> ${mode === 'hide' ? 'Вход без кеша' : mode === 'split' ? 'Новый вход' : 'Вход'}</span>`]
+  if (mode === 'split') {
+    items.push('<span class="small"><i class="stats-swatch" style="background:#20c997"></i> Кеш</span>')
+    if (rows.some((model) => model.cacheWrite)) items.push('<span class="small"><i class="stats-swatch" style="background:#6f42c1"></i> Запись кеша</span>')
+  }
+  items.push('<span class="small"><i class="stats-swatch" style="background:#fd7e14"></i> Выход</span>')
+  return items.join('')
+}
+
+function limitChart(models) {
+  const rows = models.flatMap((model) => (model.windows ?? []).filter((window) => Number.isFinite(window.percent)).map((window) => ({
+    model: model.model,
+    name: window.kind === 'session' ? '5 ч' : window.kind === 'weekly' ? 'неделя' : 'окно',
+    percent: window.percent,
+  })))
+  if (!rows.length) return ''
+  const bars = rows.map((row) => `<div><div class="d-flex justify-content-between gap-2 small mb-1"><span>${escape(shortModel(row.model))} · ${row.name}</span><strong>≈ ${String(row.percent).replace('.', ',')}%</strong></div><div class="progress" style="height:8px"><div class="progress-bar ${usageBar(row.percent)}" style="width:${Math.min(100, row.percent)}%"></div></div></div>`).join('')
+  return `<div class="col-12"><article class="card shadow-sm"><div class="card-body vstack gap-2"><h2 class="h6 mb-1">Доля лимита</h2>${bars}</div></article></div>`
+}
+
+function shortModel(model) {
+  const name = String(model)
+  return name.length > 28 ? `${name.slice(0, 27)}…` : name
+}
+
+function formatTokens(value) {
+  return new Intl.NumberFormat('ru').format(value || 0)
+}
+
+function limitCell(windows) {
+  if (!windows?.length) return 'нет квоты'
+  return windows.map((window) => {
+    const name = window.kind === 'session' ? '5 ч' : window.kind === 'weekly' ? 'неделя' : 'окно'
+    const scope = window.scope ? ` ${window.scope}` : ''
+    if (!Number.isFinite(window.percent)) return `${name}${scope}: нет квоты`
+    return `${name}${scope}: ≈ ${String(window.percent).replace('.', ',')}%`
+  }).join(' · ')
 }
 
 function setLink(selector, href) {

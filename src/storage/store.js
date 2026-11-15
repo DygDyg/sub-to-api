@@ -28,6 +28,8 @@ const EMPTY = {
     settingsKey: '',
     settingsKeyScope: 'internet',
     apiKey: '',
+    apiKeyScope: 'localhost',
+    apiKeys: [],
     requestLogLimit: 200,
     logPrompts: false,
     saveFullRequest: false,
@@ -35,6 +37,7 @@ const EMPTY = {
   },
   accounts: {},
   requests: [],
+  usageStats: { totals: [], recent: [] },
 }
 
 export class Store {
@@ -51,12 +54,17 @@ export class Store {
       const parsed = JSON.parse(await readFile(this.path, 'utf8'))
       const settings = { ...EMPTY.settings, ...(parsed.settings ?? {}) }
       if (parsed.settings?.settingsExposure === undefined && parsed.settings?.remoteSettings) settings.settingsExposure = 'lan'
+      if (parsed.settings?.apiKeyScope === undefined) settings.apiKeyScope = parsed.settings?.authMode === 'optional' ? 'none' : 'localhost'
       return {
         ...EMPTY,
         ...parsed,
         settings,
         accounts: parsed.accounts ?? {},
         requests: Array.isArray(parsed.requests) ? parsed.requests : [],
+        usageStats: {
+          totals: Array.isArray(parsed.usageStats?.totals) ? parsed.usageStats.totals : [],
+          recent: Array.isArray(parsed.usageStats?.recent) ? parsed.usageStats.recent : [],
+        },
       }
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error
@@ -83,8 +91,12 @@ export class Store {
 
   async ensureApiKey() {
     return this.update(async (state) => {
-      if (!state.settings.apiKey) state.settings.apiKey = `sta_${randomUUID().replaceAll('-', '')}`
-    }).then((state) => state.settings.apiKey)
+      if (!state.settings.apiKey && !state.settings.apiKeys?.some((item) => item?.key)) {
+        const key = `sta_${randomUUID().replaceAll('-', '')}`
+        state.settings.apiKey = key
+        state.settings.apiKeys = [{ id: randomUUID(), label: 'Основной', key }]
+      }
+    }).then((state) => state.settings.apiKey || state.settings.apiKeys?.find((item) => item?.key)?.key || '')
   }
 
   async #write(state) {
