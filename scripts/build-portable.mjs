@@ -63,6 +63,9 @@ run(process.execPath, [
 ])
 
 run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'scripts', 'set-exe-icon.ps1'), '-Exe', executable, '-Icon', join(root, 'assets', 'icon.ico')])
+await hideConsole(executable)
+await copyFile(join(root, 'scripts', 'tray.ps1'), join(outputDir, 'tray.ps1'))
+await copyFile(join(root, 'assets', 'icon.ico'), join(outputDir, 'icon.ico'))
 await copyFile(join(root, 'scripts', 'portable-start.bat'), join(outputDir, 'start.bat'))
 await copyFile(join(root, 'THIRD_PARTY_NOTICES.md'), join(outputDir, 'THIRD_PARTY_NOTICES.md'))
 await writeFile(join(outputDir, 'README.txt'), `SubToAPI ${version}
@@ -86,6 +89,16 @@ await writeFile(join(root, 'release', 'RELEASE_NOTES.txt'), `Портативн�
 console.log(`Готово: ${outputDir}`)
 console.log(`Архив: ${archive}`)
 
+async function hideConsole(exe) {
+  const bytes = await readFile(exe)
+  const pe = bytes.readUInt32LE(0x3c)
+  if (bytes.readUInt32LE(pe) !== 0x4550) throw new Error('sub-to-api.exe is not a PE file')
+  const magic = bytes.readUInt16LE(pe + 24)
+  if (magic !== 0x20b && magic !== 0x10b) throw new Error('Unknown PE optional header')
+  bytes.writeUInt16LE(2, pe + 24 + 68)
+  await writeFile(exe, bytes)
+}
+
 async function archiveVersion() {
   const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
   const tagged = process.env.SUB_TO_API_VERSION?.trim().replace(/^v/, '')
@@ -103,7 +116,7 @@ async function zipPortable(version) {
   await rm(stageRoot, { recursive: true, force: true })
   await rm(archive, { force: true })
   await mkdir(stage, { recursive: true })
-  for (const name of ['sub-to-api.exe', 'start.bat', 'README.txt', 'THIRD_PARTY_NOTICES.md']) {
+  for (const name of ['sub-to-api.exe', 'start.bat', 'tray.ps1', 'icon.ico', 'README.txt', 'THIRD_PARTY_NOTICES.md']) {
     await copyFile(join(outputDir, name), join(stage, name))
   }
   run('tar.exe', ['-a', '-c', '-f', archive, '-C', stageRoot, 'SubToAPI'])

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, openSync, mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, openSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isSea } from 'node:sea'
@@ -90,8 +90,10 @@ function listen(server, port, host) {
 }
 
 function startTray(port) {
-  if (process.env.SUB_TO_API_NO_TRAY === '1' || process.platform !== 'win32' || isSea()) return undefined
-  const script = join(dirname(fileURLToPath(import.meta.url)), '../scripts/tray.ps1')
+  if (process.env.SUB_TO_API_NO_TRAY === '1' || process.platform !== 'win32') return undefined
+  const script = isSea()
+    ? join(dirname(process.execPath), 'tray.ps1')
+    : join(dirname(fileURLToPath(import.meta.url)), '../scripts/tray.ps1')
   if (!existsSync(script)) return undefined
   const logDir = APP_DIR
   mkdirSync(logDir, { recursive: true })
@@ -103,6 +105,13 @@ function startTray(port) {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error)
+  const message = error instanceof Error ? error.message : String(error)
+  console.error(message)
+  if (isSea()) {
+    try {
+      mkdirSync(APP_DIR, { recursive: true })
+      appendFileSync(join(APP_DIR, 'startup.log'), `${new Date().toISOString()} ${message}\n`)
+    } catch { /* the console is hidden in the portable build */ }
+  }
   process.exitCode = 1
 })

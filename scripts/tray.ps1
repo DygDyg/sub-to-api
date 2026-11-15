@@ -18,7 +18,8 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $url = "http://127.0.0.1:$Port/"
-$iconPath = Join-Path $PSScriptRoot '..\assets\icon.ico'
+$iconPath = Join-Path $PSScriptRoot 'icon.ico'
+if (-not (Test-Path -LiteralPath $iconPath)) { $iconPath = Join-Path $PSScriptRoot '..\assets\icon.ico' }
 $icon = New-Object System.Drawing.Icon $iconPath
 $script:popupWidth = 320
 
