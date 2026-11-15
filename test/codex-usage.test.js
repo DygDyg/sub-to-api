@@ -7,7 +7,6 @@ const json = (payload, status = 200) => new Response(JSON.stringify(payload), { 
 test('Codex usage reads reset_at as unix seconds and falls back to reset_after_seconds', async () => {
   const resetAt = 1_794_000_000
   const provider = new CodexProvider({ async read() { return { accounts: { codex: { default: 'a', accounts: { a: { accessToken: 'token', accountId: 'acc', expiresAt: Date.now() + 3_600_000 } } } } } } })
-  provider.fetch = undefined
   const original = globalThis.fetch
   globalThis.fetch = async (url) => {
     assert.match(String(url), /wham\/usage/)

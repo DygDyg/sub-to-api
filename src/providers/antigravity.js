@@ -28,14 +28,14 @@ export class AntigravityProvider extends SessionProvider {
   async exchange(callback, input) {
     const saved = (await this.store.read()).settings.antigravityClientId
     const clientId = input.clientId || saved || process.env.ANTIGRAVITY_CLIENT_ID
-    const response = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: callback.code, client_id: clientId, redirect_uri: callback.redirectUri, code_verifier: callback.pkce.verifier }) })
+    const response = await this.fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: callback.code, client_id: clientId, redirect_uri: callback.redirectUri, code_verifier: callback.pkce.verifier }) })
     if (!response.ok) throw await providerError(response, 'Google OAuth')
     const tokens = await response.json()
     return { ...tokensToSession(tokens), clientId, account: 'Google account' }
   }
 
   async refresh(session) {
-    const response = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: session.refreshToken, client_id: session.clientId }) })
+    const response = await this.fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: session.refreshToken, client_id: session.clientId }) })
     if (!response.ok) throw await providerError(response, 'Google refresh')
     return tokensToSession(await response.json(), session)
   }
@@ -43,7 +43,7 @@ export class AntigravityProvider extends SessionProvider {
   async listModels() { const session = await this.session().catch(() => undefined); return session ? [{ id: 'gemini-pro', name: 'Antigravity Gemini', supportsTools: true }] : [] }
   async usage() { return { supported: false, windows: [], fetchedAt: Date.now(), error: 'Квота появится после подтверждения project discovery.' } }
   async *streamWithSession(request, session) {
-    const response = await fetch('https://cloudcode-pa.googleapis.com/v1internal:generateContent', { method: 'POST', headers: { authorization: `Bearer ${session.accessToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: request.model, user_content: request.messages.at(-1)?.content ?? '' }), signal: request.signal })
+    const response = await this.fetch('https://cloudcode-pa.googleapis.com/v1internal:generateContent', { method: 'POST', headers: { authorization: `Bearer ${session.accessToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: request.model, user_content: request.messages.at(-1)?.content ?? '' }), signal: request.signal })
     if (!response.ok) throw await providerError(response, 'Antigravity')
     const payload = await response.json()
     yield { type: 'text', text: JSON.stringify(payload).slice(0, 4000) }

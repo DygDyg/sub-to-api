@@ -102,13 +102,15 @@ async function load({ refreshUsage = false } = {}) {
     document.querySelector('#port-status').textContent = `Сейчас открыт ${overview.settings.effectivePort}: порт ${overview.settings.port} занят.`
   }
   document.querySelector('#active').textContent = String(overview.activeRequests)
+  renderProxy(overview)
+  renderCustomProviders(overview.customProviders ?? [])
   document.querySelector('#app-version').textContent = overview.version ? `v${overview.version}` : ''
   document.querySelector('#update-check').checked = overview.settings.updateCheck !== false
   applyComplexity(overview.settings.complexity)
   loadUpdate().catch(() => undefined)
   const open = new Set(JSON.parse(localStorage.getItem('provider-open') || '[]'))
-  const connected = overview.providers.filter((provider) => provider.accounts.length)
-  const available = overview.providers.filter((provider) => !provider.accounts.length)
+  const connected = overview.providers.filter((provider) => provider.custom || provider.accounts.length)
+  const available = overview.providers.filter((provider) => !provider.custom && !provider.accounts.length)
   providers.replaceChildren(...connected.map((provider) => renderProvider(provider, open.has(provider.id))))
   document.querySelector('#open-connect').onclick = () => openConnect(available)
   limitsSeq += 1
@@ -244,6 +246,7 @@ function renderProvider(provider, opened) {
       <div data-usage class="vstack gap-3"><p class="text-body-secondary mb-0">Квота загружается…</p></div>
       <div data-models><p class="text-body-secondary mb-0">Модели загружаются…</p></div>
       <p class="error small mb-0" data-status></p>
+      ${provider.custom ? `<p class="text-body-secondary small mb-0">Ключ задаётся в «Настройках», раздел «Свои API-провайдеры».</p>` : ''}
       ${provider.id === 'antigravity' ? `<input class="form-control" name="clientId" placeholder="Google OAuth client ID" value="${escape(provider.clientId ?? '')}">` : ''}
       <form hidden class="vstack gap-2">
         <input class="form-control" name="callback" placeholder="Callback URL или код">
@@ -364,7 +367,7 @@ function catalogItem(model) {
     ? `<span>за 100K</span><div>вход <strong>${escape(model.price.input)}</strong></div><div>выход <strong>${escape(model.price.output)}</strong></div>`
     : model.price?.unit ? `<strong>${escape(model.price.unit)}</strong>` : ''
   card.innerHTML = `<div class="min-w-0"><strong>${escape(model.name)}</strong><div class="catalog-id"><code>${escape(model.id)}</code><button type="button" class="btn btn-outline-secondary btn-icon" title="Копировать идентификатор" aria-label="Копировать идентификатор"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button></div>${model.description ? `<p class="text-body-secondary small mb-0">${escape(model.description)}</p>` : ''}<div class="tags">${tags.map(([kind, mark, text]) => `<span class="badge rounded-pill ${kind === 'hidden' ? 'text-bg-danger' : 'bg-body-tertiary text-body-secondary border'}">${mark}${escape(text)}</span>`).join('')}</div></div>${price ? `<div class="price-col" title="${escape(model.price.title)}">${price}</div>` : ''}`
-  card.querySelector('button').onclick = () => navigator.clipboard.writeText(model.id)
+  card.querySelector('button').onclick = (event) => copyText(model.id, event.currentTarget)
   if (model.capability === 'chat') card.querySelector('.tags').insertAdjacentHTML('afterend', tierSelect(model.id))
   const select = card.querySelector('[data-tier]')
   if (select) select.onchange = () => saveModelTier(model.id, select)
@@ -720,9 +723,9 @@ function apiKeyRow(item) {
     button.title = hidden ? 'Скрыть' : 'Показать'
     button.setAttribute('aria-label', button.title)
   }
-  row.querySelector('[data-copy]').onclick = async () => {
-    await navigator.clipboard.writeText(row.querySelector('[data-key]').value)
-    document.querySelector('#port-status').textContent = 'Ключ скопирован'
+  row.querySelector('[data-copy]').onclick = async (event) => {
+    const ok = await copyText(row.querySelector('[data-key]').value, event.currentTarget)
+    document.querySelector('#port-status').textContent = ok ? 'Ключ скопирован' : 'Не удалось скопировать ключ'
   }
   row.querySelector('[data-new]').onclick = () => {
     row.querySelector('[data-key]').value = newApiKey()
@@ -757,9 +760,9 @@ function bindReveal(inputId, buttonId) {
   }
 }
 bindReveal('#settings-key', '#show-settings-key')
-document.querySelector('#copy-settings-key').onclick = async () => {
-  await navigator.clipboard.writeText(document.querySelector('#settings-key').value)
-  document.querySelector('#port-status').textContent = 'Ключ настроек скопирован'
+document.querySelector('#copy-settings-key').onclick = async (event) => {
+  const ok = await copyText(document.querySelector('#settings-key').value, event.currentTarget)
+  document.querySelector('#port-status').textContent = ok ? 'Ключ настроек скопирован' : 'Не удалось скопировать ключ настроек'
 }
 document.querySelector('#regenerate-settings-key').onclick = async () => {
   const status = document.querySelector('#port-status')
@@ -1037,7 +1040,7 @@ async function loadPools() {
     card.className = 'card shadow-sm pool-card'
     const warn = pool.strategy === 'by-complexity' && !complexityEnabled() ? '<small class="d-block text-warning">Режим выбора по сложности выключен в настройках — пул работает по остатку лимита.</small>' : ''
     const via = pool.strategy === 'by-complexity' && pool.classifier ? ` · ${classifierName[pool.classifier] || pool.classifier}` : ''
-    card.innerHTML = `<div class="card-body d-flex justify-content-between align-items-start gap-3"><div class="min-w-0"><code>pool/${escape(pool.id)}</code><small class="d-block text-body-secondary">${escape(strategyName[pool.strategy] || pool.strategy)}${escape(via)} · ${pluralModels(pool.members.length)}</small>${warn}<ol class="small text-body-secondary mb-0 mt-2 ps-3">${pool.members.map((id) => `<li><code>${escape(id)}</code></li>`).join('')}</ol></div><div class="d-flex gap-2 flex-none"><button type="button" class="btn btn-outline-secondary btn-icon" data-edit title="Редактировать" aria-label="Редактировать">${poolIcons.pencil}</button><button type="button" class="btn btn-outline-secondary btn-sm" data-delete>Удалить</button></div></div>`
+    card.innerHTML = `<div class="card-body d-flex justify-content-between align-items-start gap-3"><div class="min-w-0"><code>pool/${escape(pool.id)}</code><small class="d-block text-body-secondary">${escape(strategyName[pool.strategy] || pool.strategy)}${escape(via)} · ${pluralModels(pool.members.length)}</small>${warn}<ol class="small text-body-secondary mb-0 mt-2 ps-3">${pool.members.map((id) => `<li><code>${escape(id)}</code>${pool.strategy === 'by-complexity' ? ` ${tierBadge(id)}` : ''}</li>`).join('')}</ol></div><div class="d-flex gap-2 flex-none"><button type="button" class="btn btn-outline-secondary btn-icon" data-edit title="Редактировать" aria-label="Редактировать">${poolIcons.pencil}</button><button type="button" class="btn btn-outline-secondary btn-sm" data-delete>Удалить</button></div></div>`
     card.querySelector('[data-edit]').onclick = () => openPoolDialog(pool)
     card.querySelector('[data-delete]').onclick = async () => {
       await api(`/api/pools/${encodeURIComponent(pool.id)}`, { method: 'DELETE' })
@@ -1136,8 +1139,8 @@ async function loadUpdate() {
   renderUpdate(await api('/api/update'))
 }
 
-async function waitForRestart(expected) {
-  const status = document.querySelector('#update-status')
+async function waitForRestart(expected, statuses = [document.querySelector('#update-status')]) {
+  const status = { set textContent(text) { statuses.forEach((node) => { node.textContent = text }) } }
   const deadline = Date.now() + 120_000
   await new Promise((resolve) => setTimeout(resolve, 2000))
   while (Date.now() < deadline) {
@@ -1151,7 +1154,7 @@ async function waitForRestart(expected) {
       if (update.current) {
         status.textContent = 'Обновление не применилось, см. settings/update.log'
         updateInstalling = false
-        document.querySelector('#update-install').disabled = false
+        document.querySelectorAll('#update-install, #ud-install').forEach((node) => { node.disabled = false })
         return
       }
     } catch { /* сервер ещё перезапускается */ }
@@ -1160,24 +1163,85 @@ async function waitForRestart(expected) {
   status.textContent = 'Сервер не вернулся. Запустите start.bat и проверьте settings/update.log.'
 }
 
-document.querySelector('#update-install').onclick = async (event) => {
-  const button = event.currentTarget
-  const status = document.querySelector('#update-status')
-  const version = document.querySelector('#update-version').textContent
+async function installUpdate(button, version, ...statuses) {
   if (!confirm(`Установить ${version}? Программа перезапустится, текущие запросы прервутся.`)) return
-  button.disabled = true
+  const say = (text) => statuses.forEach((node) => { node.textContent = text })
+  document.querySelectorAll('#update-install, #ud-install').forEach((node) => { node.disabled = true })
   updateInstalling = true
-  status.textContent = 'Скачиваю…'
+  say('Скачиваю…')
   try {
     const result = await api('/api/update/install', { method: 'POST', body: '{}' })
-    status.textContent = 'Перезапуск…'
-    await waitForRestart(result.version)
+    say('Перезапуск…')
+    await waitForRestart(result.version, statuses)
   } catch (error) {
     updateInstalling = false
-    button.disabled = false
-    status.textContent = error.message
+    document.querySelectorAll('#update-install, #ud-install').forEach((node) => { node.disabled = false })
+    say(error.message)
   }
 }
+document.querySelector('#update-install').onclick = (event) => installUpdate(event.currentTarget, document.querySelector('#update-version').textContent, document.querySelector('#update-status'))
+
+function renderUpdateDialog(update, note) {
+  const dialog = document.querySelector('#update-dialog')
+  const status = dialog.querySelector('#ud-status')
+  dialog.querySelector('#ud-current').textContent = update.current ? `v${update.current}` : '—'
+  dialog.querySelector('#ud-latest').textContent = update.latest ? `v${update.latest}` : '—'
+  dialog.querySelector('#ud-checked').textContent = update.checkedAt ? formatCheckedAt(update.checkedAt) : 'ещё не проверялось'
+  const link = dialog.querySelector('#ud-link')
+  link.hidden = !update.url
+  link.href = update.url || '#'
+  const notes = dialog.querySelector('#ud-notes')
+  notes.hidden = !(update.available && update.notes)
+  notes.textContent = update.notes || ''
+  const install = dialog.querySelector('#ud-install')
+  install.hidden = !(update.supported && update.available)
+  install.disabled = updateInstalling
+  dialog.querySelector('#ud-check').disabled = update.state === 'checking' || updateInstalling
+  status.className = 'small mb-0'
+  if (note) status.textContent = note
+  else if (!update.supported) status.textContent = 'Автообновление работает в портативной сборке. При запуске из исходников обновляйте папку через git.'
+  else if (update.state === 'error' && update.error) {
+    status.textContent = `Ошибка: ${update.error}`
+    status.classList.add('text-danger')
+  } else if (update.available) {
+    status.textContent = `Доступна новая версия v${update.latest}.`
+    status.classList.add('text-success')
+  } else if (update.latest) status.textContent = 'Установлена последняя версия.'
+  else status.textContent = ''
+}
+
+async function checkUpdateInDialog() {
+  const dialog = document.querySelector('#update-dialog')
+  const check = dialog.querySelector('#ud-check')
+  check.disabled = true
+  dialog.querySelector('#ud-status').className = 'small mb-0 text-body-secondary'
+  dialog.querySelector('#ud-status').textContent = 'Проверяю…'
+  try {
+    const update = await api('/api/update/check', { method: 'POST', body: '{}' })
+    renderUpdate(update)
+    renderUpdateDialog(update)
+  } catch (error) {
+    dialog.querySelector('#ud-status').textContent = error.message
+    dialog.querySelector('#ud-status').classList.add('text-danger')
+  } finally {
+    check.disabled = updateInstalling
+  }
+}
+
+document.querySelector('#app-version').onclick = async () => {
+  const dialog = document.querySelector('#update-dialog')
+  if (!dialog.open) dialog.showModal()
+  if (updateInstalling) return
+  try {
+    const update = await api('/api/update')
+    renderUpdateDialog(update)
+    if (update.supported) await checkUpdateInDialog()
+  } catch (error) {
+    dialog.querySelector('#ud-status').textContent = error.message
+  }
+}
+document.querySelector('#ud-check').onclick = () => checkUpdateInDialog()
+document.querySelector('#ud-install').onclick = (event) => installUpdate(event.currentTarget, document.querySelector('#ud-latest').textContent, document.querySelector('#ud-status'), document.querySelector('#update-status'))
 document.querySelector('#update-check-now').onclick = async (event) => {
   const button = event.currentTarget
   button.disabled = true
@@ -1205,6 +1269,158 @@ document.querySelector('#open-full').onclick = async () => {
   document.querySelector('#full-response').textContent = full.response || 'Пусто'
   document.querySelector('#full-log').showModal()
 }
+function renderProxy(overview) {
+  const proxy = overview.settings.proxy ?? {}
+  document.querySelector('#proxy-enabled').checked = Boolean(proxy.enabled)
+  document.querySelector('#proxy-url').value = proxy.url || ''
+  const per = overview.settings.providerProxies ?? {}
+  const rows = overview.providerIds ?? overview.providers.map((provider) => ({ id: provider.id, label: provider.label }))
+  const box = document.querySelector('#provider-proxies')
+  box.replaceChildren(...rows.map((provider) => {
+    const row = document.createElement('div')
+    row.className = 'row g-2 align-items-center'
+    row.dataset.provider = provider.id
+    const value = per[provider.id] || ''
+    const mode = value === 'direct' ? 'direct' : value ? 'custom' : ''
+    row.innerHTML = `
+      <div class="col-md-3"><span class="small">${escape(provider.label)}</span></div>
+      <div class="col-md-3">
+        <select class="form-select form-select-sm" data-mode>
+          <option value="">Глобальный</option>
+          <option value="direct">Без прокси</option>
+          <option value="custom">Свой URL</option>
+        </select>
+      </div>
+      <div class="col-md-6"><input class="form-control form-control-sm" data-url placeholder="socks5://host:1080" spellcheck="false" autocomplete="off"></div>`
+    row.querySelector('[data-mode]').value = mode
+    row.querySelector('[data-url]').value = mode === 'custom' ? value : ''
+    row.querySelector('[data-mode]').onchange = () => { row.querySelector('[data-url]').disabled = row.querySelector('[data-mode]').value !== 'custom' }
+    row.querySelector('[data-url]').disabled = mode !== 'custom'
+    return row
+  }))
+}
+
+function collectProviderProxies() {
+  const result = {}
+  for (const row of document.querySelectorAll('#provider-proxies [data-provider]')) {
+    const mode = row.querySelector('[data-mode]').value
+    const url = row.querySelector('[data-url]').value.trim()
+    if (mode === 'direct') result[row.dataset.provider] = 'direct'
+    else if (mode === 'custom' && url) result[row.dataset.provider] = url
+    else result[row.dataset.provider] = ''
+  }
+  return result
+}
+
+async function saveProxy(status) {
+  status.textContent = 'Сохраняю…'
+  const saved = await api('/api/settings', {
+    method: 'POST',
+    body: JSON.stringify({
+      proxy: { enabled: document.querySelector('#proxy-enabled').checked, url: document.querySelector('#proxy-url').value.trim() },
+      providerProxies: collectProviderProxies(),
+    }),
+  })
+  status.textContent = saved.proxy?.enabled ? `Прокси включён: ${saved.proxy.url}` : 'Прокси выключен'
+  return saved
+}
+
+document.querySelector('#proxy-save').onclick = async () => {
+  const status = document.querySelector('#proxy-status')
+  try { await saveProxy(status) } catch (error) { status.textContent = error.message }
+}
+document.querySelector('#proxy-test').onclick = async () => {
+  const status = document.querySelector('#proxy-status')
+  status.textContent = 'Проверяю…'
+  try {
+    const result = await api('/api/proxy/test', { method: 'POST', body: JSON.stringify({ url: document.querySelector('#proxy-url').value.trim() }) })
+    status.textContent = result.ok ? `Работает, внешний IP ${result.ip} (${result.ms} мс)` : `Не работает: ${result.error}`
+  } catch (error) { status.textContent = error.message }
+}
+
+function renderCustomProviders(list) {
+  const box = document.querySelector('#custom-providers')
+  if (!list.length) {
+    box.innerHTML = '<p class="text-body-secondary small mb-0">Пока нет. Добавьте провайдера, и его модели появятся как id/модель.</p>'
+    return
+  }
+  box.replaceChildren(...list.map((provider) => {
+    const row = document.createElement('div')
+    row.className = 'd-flex justify-content-between align-items-center gap-3 border rounded p-3'
+    row.innerHTML = `
+      <div class="min-w-0">
+        <strong>${escape(provider.label)}</strong>
+        <span class="text-body-secondary small">${provider.enabled === false ? ' · выключен' : ''}</span><br>
+        <span class="text-body-secondary small">${escape(provider.id)} · ${provider.protocol === 'anthropic' ? 'Anthropic' : 'OpenAI'} · ${escape(provider.baseUrl)} · ${provider.hasKey ? `ключ ${escape(provider.apiKey)}` : 'без ключа'}</span>
+      </div>
+      <div class="d-flex gap-2 flex-none">
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-edit>Изменить</button>
+        <button type="button" class="btn btn-outline-danger btn-sm" data-remove>Удалить</button>
+      </div>`
+    row.querySelector('[data-edit]').onclick = () => openCustomForm(provider)
+    row.querySelector('[data-remove]').onclick = async () => {
+      if (!confirm(`Удалить провайдера «${provider.label}»?`)) return
+      await api(`/api/custom-providers/${encodeURIComponent(provider.id)}`, { method: 'DELETE' })
+      await load()
+    }
+    return row
+  }))
+}
+
+let customOriginalId = ''
+
+function openCustomForm(provider) {
+  const form = document.querySelector('#custom-form')
+  form.hidden = false
+  customOriginalId = provider?.id || ''
+  document.querySelector('#custom-label').value = provider?.label || ''
+  document.querySelector('#custom-id').value = provider?.id || ''
+  document.querySelector('#custom-protocol').value = provider?.protocol || 'openai'
+  document.querySelector('#custom-base').value = provider?.baseUrl || ''
+  document.querySelector('#custom-key').value = ''
+  document.querySelector('#custom-key').placeholder = provider?.hasKey ? `Сохранён: ${provider.apiKey}. Пусто — не менять` : ''
+  document.querySelector('#custom-models').value = (provider?.models ?? []).join('\n')
+  document.querySelector('#custom-headers').value = provider?.headers && Object.keys(provider.headers).length ? JSON.stringify(provider.headers, null, 2) : ''
+  document.querySelector('#custom-status').textContent = ''
+  document.querySelector('#custom-label').focus()
+}
+
+function customPayload() {
+  return {
+    originalId: customOriginalId,
+    label: document.querySelector('#custom-label').value.trim(),
+    id: document.querySelector('#custom-id').value.trim(),
+    protocol: document.querySelector('#custom-protocol').value,
+    baseUrl: document.querySelector('#custom-base').value.trim(),
+    apiKey: document.querySelector('#custom-key').value.trim(),
+    models: document.querySelector('#custom-models').value,
+    headers: document.querySelector('#custom-headers').value.trim(),
+  }
+}
+
+document.querySelector('#custom-add').onclick = () => openCustomForm()
+document.querySelector('#custom-cancel').onclick = () => { document.querySelector('#custom-form').hidden = true }
+document.querySelector('#custom-form').onsubmit = async (event) => {
+  event.preventDefault()
+  const status = document.querySelector('#custom-status')
+  status.textContent = 'Сохраняю…'
+  try {
+    await api('/api/custom-providers', { method: 'POST', body: JSON.stringify(customPayload()) })
+    document.querySelector('#custom-form').hidden = true
+    await load()
+  } catch (error) { status.textContent = error.message }
+}
+document.querySelector('#custom-test').onclick = async () => {
+  const status = document.querySelector('#custom-status')
+  status.textContent = 'Проверяю /models…'
+  try {
+    const result = await api('/api/custom-providers/test', { method: 'POST', body: JSON.stringify(customPayload()) })
+    status.textContent = result.ok
+      ? `Доступно моделей: ${result.count}${result.models?.length ? ` (${result.models.slice(0, 8).join(', ')})` : ''} за ${result.ms} мс`
+      : `Не отвечает: ${result.error}`
+  } catch (error) { status.textContent = error.message }
+}
+
 document.querySelector('#settings-form').onsubmit = async (event) => {
   event.preventDefault()
   const status = document.querySelector('#port-status')
@@ -1461,8 +1677,9 @@ function setLink(selector, href) {
 const PROMPT_STEPS = `Порядок работы:
 1. GET {BASE}/v1/model-tiers с заголовком Authorization: Bearer {API_KEY}. В ответе поле instructions — правила расстановки, models[] — модели с полями id, name, provider, tier, tierSet, contextWindow, efforts, supportsTools, supportsImages, price.
 2. Реши уровень каждой чат-модели по правилам из instructions.
-3. Сохрани всё одним запросом: POST {BASE}/api/model-tiers, заголовки Content-Type: application/json и x-settings-key: {SETTINGS_KEY}, тело {"tiers": {"provider/model": "light|medium|heavy", ...}}. Значение null сбрасывает уровень.
-4. Покажи таблицу: модель, уровень, короткое обоснование. Сверься с ответом POST — там итоговая карта уровней.`
+3. Выбери модель для LLM-классификатора сложности: самую быструю и дешёвую light-модель с поддержкой длинного контекста.
+4. Сохрани всё одним запросом: POST {BASE}/api/model-tiers, заголовки Content-Type: application/json и x-settings-key: {SETTINGS_KEY}, тело {"tiers": {"provider/model": "light|medium|heavy", ...}, "classifierModel": "provider/model"}. Значение null сбрасывает уровень.
+5. Покажи таблицу: модель, уровень, короткое обоснование, и отдельно — выбранную модель классификатора. Сверься с ответом POST.`
 
 async function renderTiersPrompt(settings) {
   const box = document.querySelector('#tiers-prompt')
@@ -1475,7 +1692,8 @@ async function renderTiersPrompt(settings) {
   const body = guide
     ? guide.replaceAll('{BASE}', base).replaceAll('{API_KEY}', apiKey).replaceAll('{SETTINGS_KEY}', settingsKey)
     : ''
-  box.textContent = [body, '', PROMPT_STEPS.replaceAll('{BASE}', base).replaceAll('{API_KEY}', apiKey).replaceAll('{SETTINGS_KEY}', settingsKey)].filter(Boolean).join('\n')
+  // в instructions уже есть «Порядок работы»; запасной текст — только если сервер его не вернул
+  box.textContent = body || PROMPT_STEPS.replaceAll('{BASE}', base).replaceAll('{API_KEY}', apiKey).replaceAll('{SETTINGS_KEY}', settingsKey)
 }
 document.querySelector('#prompt-real-keys')?.addEventListener('change', (event) => {
   if (event.currentTarget.checked && !document.querySelector('#settings-key').value) {
@@ -1492,11 +1710,42 @@ function curlExample(base, key) {
   return `curl ${base}/chat/completions${auth} \\\n  -H "Content-Type: application/json" \\\n  -d "{\\"model\\":\\"codex/gpt-5\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"Привет\\"}]}"`
 }
 
+async function writeClipboard(value) {
+  const text = String(value ?? '')
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {}
+  }
+  const area = document.createElement('textarea')
+  area.value = text
+  area.setAttribute('readonly', '')
+  area.style.position = 'fixed'
+  area.style.top = '-1000px'
+  area.style.opacity = '0'
+  document.body.append(area)
+  area.select()
+  area.setSelectionRange(0, text.length)
+  let ok = false
+  try { ok = document.execCommand('copy') } catch {}
+  area.remove()
+  return ok
+}
+
 async function copyText(value, button) {
-  await navigator.clipboard.writeText(value)
-  const previous = button.textContent
-  button.title = 'Скопировано'
-  setTimeout(() => { button.title = previous }, 1200)
+  const ok = await writeClipboard(value)
+  if (!button) return ok
+  const previousTitle = button.title
+  button.title = ok ? 'Скопировано' : 'Не удалось скопировать'
+  button.classList.add(ok ? 'btn-success' : 'btn-danger')
+  button.classList.remove('btn-outline-secondary')
+  setTimeout(() => {
+    button.title = previousTitle
+    button.classList.remove('btn-success', 'btn-danger')
+    button.classList.add('btn-outline-secondary')
+  }, 1200)
+  return ok
 }
 
 document.querySelectorAll('[data-copy-target]').forEach((button) => {

@@ -206,6 +206,69 @@ test('llm classifier timeout falls back to heuristics', async () => {
   assert.equal(out.find((event) => event.type === 'text')?.text, 'mini')
 })
 
+test('complexity pool fails over inside the same tier on quota and skips the model afterwards', async () => {
+  const seen = []
+  const grok = new BaseProvider('grok', 'Grok')
+  const codex = new BaseProvider('codex', 'Codex')
+  grok.stream = async function* (request) {
+    seen.push(request.model)
+    if (request.model === 'opus-a') yield { type: 'error', text: 'Grok: HTTP 429: usage limit reached', status: 429, code: 'rate_limit' }
+    else yield { type: 'text', text: request.model }
+  }
+  codex.stream = async function* (request) { seen.push(request.model); yield { type: 'text', text: request.model } }
+  const recorded = []
+  const service = new GatewayService({
+    read: async () => ({
+      pools: [{ id: 'smart', strategy: 'by-complexity', classifier: 'heuristic', members: ['grok/opus-a', 'codex/sonnet', 'codex/opus-b'] }],
+      settings: { complexity: { heuristic: { enabled: true, mediumAt: 1, heavyAt: 3 }, llm: { enabled: false, model: '', timeoutMs: 1500 } }, modelTiers: { 'grok/opus-a': 'heavy', 'codex/sonnet': 'medium', 'codex/opus-b': 'heavy' } },
+    }),
+    update: async (change) => {
+      const state = { requests: [], settings: {} }
+      await change(state)
+      recorded.push(state.requests[0])
+    },
+  }, new ProviderRegistry([grok, codex]))
+  const run = async () => {
+    const out = []
+    for await (const event of service.stream({ model: 'pool/smart', messages: [{ role: 'user', content: 'Спроектируй архитектуру очереди с учётом гонки и deadlock, докажи корректность' }], complexityOverride: 'heavy' })) out.push(event)
+    return out
+  }
+  const first = await run()
+  assert.equal(first.some((event) => event.type === 'error'), false)
+  assert.equal(first.find((event) => event.type === 'text')?.text, 'opus-b')
+  assert.match(recorded.at(-1).model, /замена: grok\/opus-a: лимит/)
+  const second = await run()
+  assert.equal(second.find((event) => event.type === 'text')?.text, 'opus-b')
+  assert.deepEqual(seen, ['opus-a', 'opus-b', 'opus-b'])
+})
+
+test('bad request is not retried on another pool model', async () => {
+  const seen = []
+  const grok = new BaseProvider('grok', 'Grok')
+  grok.stream = async function* (request) { seen.push(request.model); yield { type: 'error', text: 'bad tool schema', status: 400, code: 'invalid_request' } }
+  const service = new GatewayService({
+    read: async () => ({ pools: [{ id: 'p', strategy: 'first-available', members: ['grok/a', 'grok/b'] }], settings: {} }),
+    update: async () => {},
+  }, new ProviderRegistry([grok]))
+  const out = []
+  for await (const event of service.stream({ model: 'pool/p', messages: [{ role: 'user', content: 'hi' }] })) out.push(event)
+  assert.equal(out.at(-1).status, 400)
+  assert.deepEqual(seen, ['a'])
+})
+
+test('model tiers POST can also pick the classifier model', async () => {
+  let state = { settings: { complexity: { heuristic: { enabled: true, mediumAt: 1, heavyAt: 3 } } } }
+  const service = new GatewayService({
+    read: async () => state,
+    update: async (change) => { await change(state); return state },
+  }, new ProviderRegistry([new BaseProvider('claude', 'Claude')]))
+  const saved = await service.setModelTiers({ 'claude/haiku': 'light' }, 'claude/haiku')
+  assert.equal(saved.tiers['claude/haiku'], 'light')
+  assert.equal(saved.complexity.llm.model, 'claude/haiku')
+  assert.equal(saved.complexity.llm.enabled, true)
+  assert.deepEqual(saved.complexity.classifiers, ['heuristic', 'llm', 'auto'])
+})
+
 test('x-complexity overrides the classifier', async () => {
   const { service } = complexityService()
   const out = []

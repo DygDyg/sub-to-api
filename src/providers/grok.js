@@ -22,7 +22,7 @@ export class GrokProvider extends SessionProvider {
 
   async exchange(callback) {
     const discovery = await this.#discovery()
-    const response = await fetch(discovery.token_endpoint, {
+    const response = await this.fetch(discovery.token_endpoint, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'authorization_code', client_id: CLIENT_ID, code: callback.code, redirect_uri: callback.redirectUri, code_verifier: callback.pkce.verifier, code_challenge: callback.pkce.challenge, code_challenge_method: 'S256' }),
     })
@@ -31,7 +31,7 @@ export class GrokProvider extends SessionProvider {
   }
 
   async refresh(session) {
-    const response = await fetch(session.tokenEndpoint, {
+    const response = await this.fetch(session.tokenEndpoint, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'refresh_token', client_id: CLIENT_ID, refresh_token: session.refreshToken }),
     })
@@ -42,7 +42,7 @@ export class GrokProvider extends SessionProvider {
   async listModels(_account, signal) {
     const session = await this.session(undefined, false).catch(() => undefined)
     if (!session) return []
-    const response = await fetch('https://cli-chat-proxy.grok.com/v1/models', { headers: { ...auth(session), 'x-xai-token-auth': 'xai-grok-cli' }, signal })
+    const response = await this.fetch('https://cli-chat-proxy.grok.com/v1/models', { headers: { ...auth(session), 'x-xai-token-auth': 'xai-grok-cli' }, signal })
     if (!response.ok) throw await providerError(response, 'Grok models')
     const payload = await response.json()
     return (payload.data ?? []).filter((model) => model.id && !/imagine|image-|video|embed/i.test(model.id)).map((model) => ({ id: model.id, name: model.name || model.id, description: model.description, contextWindow: Number(model.context_window ?? model.context_length) || GROK_CONTEXT[model.id], supportsTools: true, supportsImages: !/code|embed/i.test(model.id) }))
@@ -51,7 +51,7 @@ export class GrokProvider extends SessionProvider {
   async usage(_account, signal) {
     const session = await this.session().catch(() => undefined)
     if (!session) return { supported: false, windows: [], fetchedAt: Date.now() }
-    const response = await fetch('https://cli-chat-proxy.grok.com/v1/billing?format=credits', { headers: { ...auth(session), 'x-xai-token-auth': 'xai-grok-cli' }, signal })
+    const response = await this.fetch('https://cli-chat-proxy.grok.com/v1/billing?format=credits', { headers: { ...auth(session), 'x-xai-token-auth': 'xai-grok-cli' }, signal })
     if (!response.ok) return { supported: true, windows: [], error: `HTTP ${response.status}`, fetchedAt: Date.now() }
     const payload = await response.json()
     const used = payload.config?.creditUsagePercent
@@ -61,7 +61,7 @@ export class GrokProvider extends SessionProvider {
   async listMediaModels(signal) {
     const session = await this.session(undefined, false).catch(() => undefined)
     if (!session) return []
-    const response = await fetch('https://api.x.ai/v1/models', { headers: auth(session), signal })
+    const response = await this.fetch('https://api.x.ai/v1/models', { headers: auth(session), signal })
     if (!response.ok) return []
     const payload = await response.json()
     return (payload.data ?? []).flatMap((model) => {
@@ -72,7 +72,7 @@ export class GrokProvider extends SessionProvider {
 
   async generateImage(input, signal) {
     const session = await this.session()
-    const response = await fetch('https://api.x.ai/v1/images/generations', {
+    const response = await this.fetch('https://api.x.ai/v1/images/generations', {
       method: 'POST',
       headers: { ...auth(session), 'content-type': 'application/json' },
       body: JSON.stringify({ prompt: input.prompt, model: input.model || 'grok-imagine-image-2.0', response_format: 'b64_json', ...(input.size ? { aspect_ratio: grokAspect(input.size) } : {}), ...(input.quality === 'low' ? { quality: 'low' } : input.quality ? { quality: 'medium' } : {}) }),
@@ -84,7 +84,7 @@ export class GrokProvider extends SessionProvider {
 
   async startVideo(input, signal) {
     const session = await this.session()
-    const response = await fetch('https://api.x.ai/v1/videos/generations', {
+    const response = await this.fetch('https://api.x.ai/v1/videos/generations', {
       method: 'POST',
       headers: { ...auth(session), 'content-type': 'application/json' },
       body: JSON.stringify({ prompt: input.prompt, model: input.model || 'grok-imagine-video-1.5', ...(input.duration ? { duration: input.duration } : {}), ...(input.aspectRatio ? { aspect_ratio: input.aspectRatio } : {}), ...(input.resolution ? { resolution: input.resolution } : {}), ...(input.imageUrl ? { image: { url: input.imageUrl } } : {}) }),
@@ -96,13 +96,13 @@ export class GrokProvider extends SessionProvider {
 
   async videoStatus(id, signal) {
     const session = await this.session()
-    const response = await fetch(`https://api.x.ai/v1/videos/${encodeURIComponent(id)}`, { headers: auth(session), signal })
+    const response = await this.fetch(`https://api.x.ai/v1/videos/${encodeURIComponent(id)}`, { headers: auth(session), signal })
     if (!response.ok) throw await providerError(response, 'Grok video status')
     return response.json()
   }
 
   async *streamWithSession(request, session) {
-    const response = await fetch('https://api.x.ai/v1/responses', {
+    const response = await this.fetch('https://api.x.ai/v1/responses', {
       method: 'POST', headers: { ...auth(session), 'content-type': 'application/json', accept: 'text/event-stream' }, signal: request.signal,
       body: JSON.stringify(responsesBody(request)),
     })
@@ -111,7 +111,7 @@ export class GrokProvider extends SessionProvider {
   }
 
   async #discovery() {
-    const response = await fetch(DISCOVERY_URL)
+    const response = await this.fetch(DISCOVERY_URL)
     if (!response.ok) throw await providerError(response, 'Grok OIDC')
     const document = await response.json()
     for (const field of ['authorization_endpoint', 'token_endpoint']) {

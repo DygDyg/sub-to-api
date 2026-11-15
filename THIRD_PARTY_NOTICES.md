@@ -6,6 +6,18 @@ https://github.com/twbs/bootstrap
 Copyright 2011-2024 The Bootstrap Authors
 
 
+Proxy support bundles undici (MIT):
+https://github.com/nodejs/undici
+
+Copyright (c) Matteo Collina and Undici contributors
+
+
+SOCKS5 proxy support bundles socks (MIT) and its dependencies ip-address and smart-buffer (MIT):
+https://github.com/JoshGlazebrook/socks
+
+Copyright (c) 2013 Josh Glazebrook
+
+
 The Claude subscription integration is adapted from dsh-plugin-subscriptions-ru:
 https://github.com/DygDyg/dsh-plugin-subscriptions-ru
 

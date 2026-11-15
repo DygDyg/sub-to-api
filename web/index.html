@@ -15,6 +15,10 @@
     .update-banner { flex: none; margin: auto .6rem 0; padding: .6rem .7rem; border: 1px solid var(--bs-success-border-subtle); border-radius: .5rem; background: var(--bs-success-bg-subtle); }
     .update-banner:not([hidden]) + .sidebar-version { margin-top: .5rem; }
     .sidebar-version { flex: none; margin-top: auto; padding: .7rem .9rem; border-top: 1px solid var(--bs-border-color); font-size: .72rem; color: var(--bs-secondary-color); font-variant-numeric: tabular-nums; }
+    button.sidebar-version { display: block; width: 100%; text-align: left; background: none; border-left: 0; border-right: 0; border-bottom: 0; cursor: pointer; }
+    button.sidebar-version:hover, button.sidebar-version:focus-visible { color: var(--bs-body-color); background: var(--bs-tertiary-bg); }
+    .update-dialog { width: min(560px, calc(100vw - 2rem)); }
+    .update-dialog pre { max-height: 16rem; overflow: auto; white-space: pre-wrap; }
     .side-limits-title { margin: 0 0 .65rem; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--bs-secondary-color); }
     .side-limit + .side-limit { margin-top: .85rem; }
     .side-limit { --dot: var(--bs-secondary-color); }
@@ -66,6 +70,11 @@
     .pool-member code, .pool-card code { overflow-wrap: anywhere; }
     .pool-grip { cursor: grab; color: var(--bs-secondary-color); display: inline-flex; flex: none; }
     .pool-grip:active { cursor: grabbing; }
+    .tier-light { color: var(--bs-success-text-emphasis); background: var(--bs-success-bg-subtle); }
+    .tier-medium { color: var(--bs-primary-text-emphasis); background: var(--bs-primary-bg-subtle); }
+    .tier-heavy { color: var(--bs-danger-text-emphasis); background: var(--bs-danger-bg-subtle); }
+    .tier-unset { color: var(--bs-secondary-color); }
+    .pool-card .badge { font-size: .7rem; vertical-align: middle; }
     .pool-grip svg { width: 1rem; height: 1rem; display: block; }
     .pool-actions { display: flex; gap: .25rem; flex: none; }
     .pool-actions .btn-icon { width: 1.7rem; height: 1.7rem; }
@@ -134,7 +143,7 @@
         </div>
         <div id="update-status" class="small text-body-secondary mt-1"></div>
       </div>
-      <div id="app-version" class="sidebar-version"></div>
+      <button type="button" id="app-version" class="sidebar-version" title="Проверить обновления"></button>
     </aside>
     <div class="flex-grow-1 min-w-0">
       <header class="navbar sticky-top border-bottom bg-body px-3">
@@ -297,6 +306,91 @@
                   </div>
                   <p id="port-status" class="error small mb-0 mt-3"></p>
                   <p id="network-note" class="text-body-secondary small mb-0"></p>
+                </div>
+              </article>
+            </div>
+            <div class="col-12">
+              <article class="card shadow-sm">
+                <div class="card-body vstack gap-3">
+                  <div>
+                    <h2 class="h5 mb-1">Прокси для моделей</h2>
+                    <p class="text-body-secondary small mb-0">Весь исходящий трафик к провайдерам (запросы моделей, вход, обновление токенов) пойдёт через прокси. Формат: <code>socks5://user:pass@host:1080</code> или <code>http://host:8080</code>. <code>socks5h://</code> резолвит DNS на стороне прокси.</p>
+                  </div>
+                  <div class="form-check form-switch mb-0">
+                    <input class="form-check-input" id="proxy-enabled" type="checkbox" role="switch">
+                    <label class="form-check-label" for="proxy-enabled">Использовать прокси</label>
+                  </div>
+                  <div class="row g-2 align-items-center">
+                    <div class="col-md">
+                      <input id="proxy-url" class="form-control" placeholder="socks5://127.0.0.1:1080" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="col-md-auto d-flex gap-2">
+                      <button type="button" id="proxy-test" class="btn btn-outline-secondary">Проверить</button>
+                      <button type="button" id="proxy-save" class="btn btn-primary">Сохранить</button>
+                    </div>
+                  </div>
+                  <p id="proxy-status" class="small mb-0"></p>
+                  <details>
+                    <summary class="small text-body-secondary">Прокси отдельно для каждого провайдера</summary>
+                    <div id="provider-proxies" class="vstack gap-2 mt-2"></div>
+                  </details>
+                </div>
+              </article>
+            </div>
+            <div class="col-12">
+              <article class="card shadow-sm">
+                <div class="card-body vstack gap-3">
+                  <div class="d-flex justify-content-between align-items-center gap-3">
+                    <div>
+                      <h2 class="h5 mb-1">Свои API-провайдеры</h2>
+                      <p class="text-body-secondary small mb-0">Любой сервис с OpenAI-совместимым <code>/v1/chat/completions</code> или Anthropic-совместимым <code>/v1/messages</code>: OpenRouter, DeepSeek, Groq, Ollama, свой прокси. Модели доступны как <code>id/модель</code>.</p>
+                    </div>
+                    <button type="button" id="custom-add" class="btn btn-outline-secondary btn-sm">Добавить</button>
+                  </div>
+                  <div id="custom-providers" class="vstack gap-2"></div>
+                  <form id="custom-form" hidden class="border rounded p-3 vstack gap-3">
+                    <div class="row g-3">
+                      <div class="col-md-4">
+                        <label class="form-label" for="custom-label">Название</label>
+                        <input id="custom-label" class="form-control" placeholder="OpenRouter" required>
+                      </div>
+                      <div class="col-md-4">
+                        <label class="form-label" for="custom-id">id</label>
+                        <input id="custom-id" class="form-control" placeholder="openrouter" pattern="[a-z0-9][a-z0-9_-]{1,31}" required spellcheck="false" autocomplete="off">
+                      </div>
+                      <div class="col-md-4">
+                        <label class="form-label" for="custom-protocol">Протокол</label>
+                        <select id="custom-protocol" class="form-select">
+                          <option value="openai">OpenAI (/chat/completions)</option>
+                          <option value="anthropic">Anthropic (/messages)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label class="form-label" for="custom-base">Base URL</label>
+                      <input id="custom-base" class="form-control" placeholder="https://openrouter.ai/api/v1" required spellcheck="false" autocomplete="off">
+                    </div>
+                    <div>
+                      <label class="form-label" for="custom-key">API key</label>
+                      <input id="custom-key" class="form-control" type="password" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="row g-3">
+                      <div class="col-md-6">
+                        <label class="form-label" for="custom-models">Модели вручную</label>
+                        <textarea id="custom-models" class="form-control" rows="3" placeholder="по одной в строке, если /models недоступен"></textarea>
+                      </div>
+                      <div class="col-md-6">
+                        <label class="form-label" for="custom-headers">Доп. заголовки, JSON</label>
+                        <textarea id="custom-headers" class="form-control" rows="3" placeholder='{"HTTP-Referer": "https://example"}'></textarea>
+                      </div>
+                    </div>
+                    <div class="d-flex gap-2 justify-content-end">
+                      <button type="button" id="custom-cancel" class="btn btn-outline-secondary">Отмена</button>
+                      <button type="button" id="custom-test" class="btn btn-outline-secondary">Проверить</button>
+                      <button type="submit" class="btn btn-primary">Сохранить</button>
+                    </div>
+                    <p id="custom-status" class="small mb-0"></p>
+                  </form>
                 </div>
               </article>
             </div>
@@ -600,6 +694,26 @@
       </main>
     </div>
   </div>
+  <dialog id="update-dialog" class="update-dialog p-4">
+    <form method="dialog" class="vstack gap-3">
+      <div class="d-flex justify-content-between align-items-center gap-3">
+        <h2 class="h5 mb-0">Обновления</h2>
+        <button class="btn btn-outline-secondary btn-sm" value="cancel">Закрыть</button>
+      </div>
+      <dl class="row small mb-0">
+        <dt class="col-5 fw-normal text-body-secondary">Установлена</dt><dd class="col-7 mb-1" id="ud-current">—</dd>
+        <dt class="col-5 fw-normal text-body-secondary">Последняя на GitHub</dt><dd class="col-7 mb-1" id="ud-latest">—</dd>
+        <dt class="col-5 fw-normal text-body-secondary">Проверено</dt><dd class="col-7 mb-0" id="ud-checked">—</dd>
+      </dl>
+      <p id="ud-status" class="small mb-0" role="status"></p>
+      <pre id="ud-notes" class="border rounded p-2 small mb-0" hidden></pre>
+      <div class="d-flex flex-wrap gap-2 justify-content-end">
+        <a id="ud-link" class="btn btn-outline-secondary btn-sm" target="_blank" rel="noopener" hidden>Страница релиза</a>
+        <button type="button" id="ud-check" class="btn btn-outline-secondary btn-sm">Проверить снова</button>
+        <button type="button" id="ud-install" class="btn btn-primary btn-sm" hidden>Обновить</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="settings-login">
     <form class="vstack gap-3">
       <h2 class="h5 mb-0">Ключ для входа</h2>

@@ -1,4 +1,5 @@
 import { OAuthAttempt } from '../auth/oauth.js'
+import { createProviderFetch } from '../proxy.js'
 
 const PREEMPT_MS = 5 * 60_000
 
@@ -15,6 +16,7 @@ export class SessionProvider {
     this.store = store
     this.id = id
     this.label = label
+    this.fetch = createProviderFetch(store, id)
   }
 
   async beginLogin(input = {}) {

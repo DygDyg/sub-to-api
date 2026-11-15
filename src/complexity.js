@@ -43,7 +43,7 @@ export function normalizeComplexity(input, current) {
   llm.enabled = Boolean(llm.enabled)
   llm.model = String(llm.model ?? '').trim()
   llm.timeoutMs = Number(llm.timeoutMs)
-  if (llm.model && !/^[a-z]+\/\S+$/.test(llm.model)) throw fail('Модель классификатора — вида provider/model')
+  if (llm.model && !/^[a-z0-9_-]+\/\S+$/.test(llm.model)) throw fail('Модель классификатора — вида provider/model')
   if (llm.enabled && !llm.model) throw fail('Для LLM-классификатора выберите модель')
   if (!Number.isInteger(llm.timeoutMs) || llm.timeoutMs < 300 || llm.timeoutMs > 10000) throw fail('Таймаут классификатора — от 300 до 10000 мс')
   return { heuristic, llm }
@@ -138,7 +138,8 @@ export const TIERS_GUIDE = `Ты настраиваешь уровни моде�
 Порядок работы:
 1. GET {BASE}/v1/model-tiers с заголовком Authorization: Bearer {API_KEY}. В ответе: models[] с полями id, name, provider, tier, tierSet, contextWindow, efforts, supportsTools, supportsImages, price.
 2. Реши уровень для каждой модели по критериям выше.
-3. Одним запросом сохрани всё: POST {BASE}/api/model-tiers, заголовки Content-Type: application/json и x-settings-key: {SETTINGS_KEY}, тело {"tiers": {"provider/model": "light|medium|heavy", ...}}. Значение null сбрасывает уровень.
-4. Покажи пользователю таблицу: модель, уровень, короткое обоснование. Проверь ответ POST — там итоговая карта уровней.
+3. Выбери модель для LLM-классификатора сложности. Она вызывается перед каждым новым запросом в пул и отвечает одним словом, поэтому нужна самая быстрая и дешёвая чат-модель (обычно light: haiku, mini, nano, flash, lite) с окном не меньше 128K. Не бери модели с суффиксом fast, если по price они дороже обычных, и не бери heavy — они медленные и не уложатся в таймаут. Текущий выбор — поле complexity.llm.model в ответе GET.
+4. Одним запросом сохрани всё: POST {BASE}/api/model-tiers, заголовки Content-Type: application/json и x-settings-key: {SETTINGS_KEY}, тело {"tiers": {"provider/model": "light|medium|heavy", ...}, "classifierModel": "provider/model"}. Значение null в tiers сбрасывает уровень. classifierModel задаёт модель LLM-классификатора и включает его.
+5. Покажи пользователю таблицу: модель, уровень, короткое обоснование, и отдельной строкой — выбранную модель классификатора с причиной. Проверь ответ POST — там итоговая карта уровней (tiers) и настройки классификатора (complexity).
 
 Ручное переопределение для отдельного запроса: заголовок x-complexity: light|medium|heavy или поле "complexity" в теле /v1/chat/completions.`

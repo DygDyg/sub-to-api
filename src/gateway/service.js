@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { apiKeyScopeOf, apiKeysOf, normalizeSettingsKeyScope, settingsExposureOf } from '../network.js'
 import { chooseMember, estimateTokens, fitsContext, normalizePool, remainingPercent } from '../pools.js'
-import { CLASSIFIER_PROMPT, TIERS, TIERS_GUIDE, TIER_INFO, classifyHeuristic, complexityOf, enabledClassifiers, lastUserText, normalizeTier, parseTier, tierOf, tierOrder } from '../complexity.js'
+import { CLASSIFIER_PROMPT, TIERS, TIERS_GUIDE, TIER_INFO, classifyHeuristic, complexityOf, enabledClassifiers, normalizeComplexity, lastUserText, normalizeTier, parseTier, tierOf, tierOrder } from '../complexity.js'
 import { priceEstimate, requestCost } from '../pricing.js'
 import { buildStats, recordUsage } from '../stats.js'
 import { LAST_REQUEST_PATH } from '../storage/store.js'
 import { writeFile } from 'node:fs/promises'
+import { CustomApiProvider, normalizeCustomProvider, publicCustomProvider } from '../providers/custom.js'
+import { fetchVia, proxyFor } from '../proxy.js'
 
 export class GatewayService {
   /**
@@ -22,6 +24,75 @@ export class GatewayService {
     this.poolCooldown = new Map()
   }
 
+  /** Пересоздаёт свои API-провайдеры из настроек. */
+  async reloadCustom() {
+    const state = await this.store.read()
+    const before = new Set(this.registry.custom.keys())
+    const adapters = []
+    for (const raw of state.settings.customProviders ?? []) {
+      if (raw.enabled === false) continue
+      try {
+        adapters.push(new CustomApiProvider(this.store, normalizeCustomProvider(raw, raw)))
+      } catch { /* битая запись не должна ронять запуск */ }
+    }
+    this.registry.setCustom(adapters)
+    for (const id of new Set([...before, ...adapters.map((adapter) => adapter.id)])) {
+      this.modelCache.delete(`${id}:chat`)
+      this.modelCache.delete(`${id}:media`)
+      this.usageCache.delete(id)
+    }
+  }
+
+  async customProviders() {
+    const state = await this.store.read()
+    return { data: (state.settings.customProviders ?? []).map(publicCustomProvider) }
+  }
+
+  /** @param {any} input */
+  async saveCustomProvider(input) {
+    let saved
+    await this.store.update((state) => {
+      const list = [...(state.settings.customProviders ?? [])]
+      const original = String(input?.originalId ?? input?.id ?? '').trim().toLowerCase()
+      const index = list.findIndex((item) => item.id === original)
+      const config = normalizeCustomProvider(input, index >= 0 ? list[index] : undefined)
+      if (list.some((item, at) => item.id === config.id && at !== index)) throw Object.assign(new Error(`Провайдер «${config.id}» уже есть`), { status: 409 })
+      if (index >= 0) list[index] = config
+      else list.push(config)
+      if (index >= 0 && original !== config.id) renameProviderRefs(state.settings, original, config.id)
+      state.settings.customProviders = list
+      saved = config
+    })
+    await this.reloadCustom()
+    return publicCustomProvider(saved)
+  }
+
+  /** @param {string} id */
+  async deleteCustomProvider(id) {
+    await this.store.update((state) => {
+      state.settings.customProviders = (state.settings.customProviders ?? []).filter((item) => item.id !== id)
+      if (state.settings.providerProxies) delete state.settings.providerProxies[id]
+      if (state.settings.enabledModels) delete state.settings.enabledModels[id]
+    })
+    await this.reloadCustom()
+    return { ok: true }
+  }
+
+  /** Проверка своего провайдера: запрос /models без сохранения. @param {any} input */
+  async testCustomProvider(input) {
+    const state = await this.store.read()
+    const previous = (state.settings.customProviders ?? []).find((item) => item.id === String(input?.originalId ?? input?.id ?? '').trim().toLowerCase())
+    const config = normalizeCustomProvider(input, previous)
+    const adapter = new CustomApiProvider(this.store, config, { fetch: (url, init) => fetchVia(proxyFor({ ...state.settings, providerProxies: { ...state.settings.providerProxies, [config.id]: input?.proxy ?? state.settings.providerProxies?.[config.id] ?? '' } }, config.id), url, init) })
+    const started = Date.now()
+    try {
+      const models = await adapter.discoverModels(AbortSignal.timeout(20_000))
+      return { ok: true, count: models.length, models: models.slice(0, 50).map((model) => model.id), ms: Date.now() - started }
+    } catch (error) {
+      return { ok: false, error: error?.message ?? String(error), ms: Date.now() - started }
+    }
+  }
+
   async overview() {
     const state = await this.store.read()
     const providers = []
@@ -31,6 +102,7 @@ export class GatewayService {
         id: adapter.id,
         label: adapter.label,
         loginKind: adapter.loginKind,
+        ...(adapter.custom ? { custom: true, protocol: adapter.protocol } : {}),
         clientId: adapter.id === 'antigravity' ? state.settings.antigravityClientId : undefined,
         accounts,
       })
@@ -52,7 +124,11 @@ export class GatewayService {
         updateCheck: state.settings.updateCheck !== false,
         complexity: complexityOf(state.settings),
         classifiers: enabledClassifiers(state.settings),
+        proxy: state.settings.proxy ?? { enabled: false, url: '' },
+        providerProxies: state.settings.providerProxies ?? {},
       },
+      providerIds: this.registry.ids(),
+      customProviders: (state.settings.customProviders ?? []).map(publicCustomProvider),
       providers,
       activeRequests: this.active.size,
       requests: loggedRequests(state),
@@ -322,17 +398,26 @@ export class GatewayService {
     }
   }
 
-  /** @param {Record<string, string | null>} map */
-  async setModelTiers(map) {
+  /**
+   * @param {Record<string, string | null>} map
+   * @param {string} [classifierModel] модель LLM-классификатора; задаёт её и включает классификатор
+   */
+  async setModelTiers(map, classifierModel) {
+    if (map === undefined && classifierModel) map = {}
     if (!map || typeof map !== 'object' || Array.isArray(map)) {
       throw Object.assign(new Error('Ожидается {"tiers": {"provider/model": "light|medium|heavy|null"}}'), { status: 400 })
+    }
+    if (classifierModel !== undefined && classifierModel !== null && typeof classifierModel !== 'string') {
+      throw Object.assign(new Error('classifierModel — строка вида provider/model'), { status: 400 })
     }
     const entries = Object.entries(map)
     if (entries.length > 2000) throw Object.assign(new Error('Слишком много моделей в одном запросе'), { status: 400 })
     for (const [id, value] of entries) {
-      if (!/^[a-z]+\/\S+$/.test(id) || id.length > 200) throw Object.assign(new Error(`Некорректный id модели: ${id}`), { status: 400 })
+      if (!/^[a-z0-9_-]+\/\S+$/.test(id) || id.length > 200) throw Object.assign(new Error(`Некорректный id модели: ${id}`), { status: 400 })
       if (value !== null && !normalizeTier(value)) throw Object.assign(new Error(`Уровень для ${id}: light, medium, heavy или null`), { status: 400 })
     }
+    const model = classifierModel?.trim()
+    if (model) this.registry.resolve(model)
     const state = await this.store.update((current) => {
       const tiers = { ...(current.settings.modelTiers ?? {}) }
       for (const [id, value] of entries) {
@@ -340,8 +425,9 @@ export class GatewayService {
         else tiers[id] = normalizeTier(value)
       }
       current.settings.modelTiers = tiers
+      if (model) current.settings.complexity = normalizeComplexity({ llm: { enabled: true, model } }, current.settings.complexity)
     })
-    return { ok: true, tiers: state.settings.modelTiers }
+    return { ok: true, tiers: state.settings.modelTiers, complexity: { ...complexityOf(state.settings), classifiers: enabledClassifiers(state.settings) } }
   }
 
   async pools() {
@@ -568,17 +654,26 @@ export class GatewayService {
         }
         await this.#record(id, request, started, route, status, error, usage, answer)
       }
-      const retry = pool && failure && !visible && index < routes.length - 1 && !request.signal?.aborted && failure.status !== 499 && failure.code !== 'aborted'
       if (!failure) {
         yield* held
         return
+      }
+      const retry = pool && !visible && index < routes.length - 1 && !request.signal?.aborted && failoverAllowed(failure)
+      if (pool && failoverAllowed(failure)) {
+        const quota = quotaFailure(failure)
+        this.poolCooldown.set(route.publicModel, Date.now() + (quota ? QUOTA_COOLDOWN_MS : POOL_COOLDOWN_MS))
+        // квота кончилась — свежий снимок usage сразу уберёт из выбора остальные модели этого провайдера
+        if (quota) {
+          const cached = this.usageCache.get(route.adapter.id)
+          if (cached && !cached.pending) cached.at = 0
+        }
       }
       if (!retry) {
         yield* held
         yield failure
         return
       }
-      this.poolCooldown.set(route.publicModel, Date.now() + POOL_COOLDOWN_MS)
+      request.failoverFrom = `${route.publicModel}: ${failureReason(failure)}`
     }
   }
 
@@ -592,8 +687,9 @@ export class GatewayService {
       state.requests.unshift({
         id,
         provider: route.adapter.id,
-        model: request.routedModel ? `${request.model}${complexityLabel(request.complexity)} → ${route.publicModel}` : route.publicModel,
+        model: request.routedModel ? `${request.model}${complexityLabel(request.complexity)} → ${route.publicModel}${request.failoverFrom ? ` (замена: ${request.failoverFrom})` : ''}` : route.publicModel,
         ...(request.complexity?.tier ? { complexity: request.complexity } : {}),
+        ...(request.failoverFrom ? { failoverFrom: request.failoverFrom } : {}),
         started,
         durationMs: Date.now() - started,
         status,
@@ -624,12 +720,42 @@ export class GatewayService {
   }
 }
 
+/** При смене id своего провайдера переносит связанные настройки. */
+function renameProviderRefs(settings, from, to) {
+  if (settings.providerProxies?.[from] !== undefined) {
+    settings.providerProxies[to] = settings.providerProxies[from]
+    delete settings.providerProxies[from]
+  }
+  if (settings.enabledModels?.[from] !== undefined) {
+    settings.enabledModels[to] = settings.enabledModels[from]
+    delete settings.enabledModels[from]
+  }
+}
+
 function loggedRequests(state) {
   const fullId = state.settings.saveFullRequest ? state.lastExchange?.id : undefined
   return state.requests.slice(0, 50).map((item) => ({ ...item, hasFull: item.id === fullId }))
 }
 
 const POOL_COOLDOWN_MS = 2 * 60 * 1000
+const QUOTA_COOLDOWN_MS = 15 * 60 * 1000
+const QUOTA_TEXT = /usage.?limit|quota|rate.?limit|limit (reached|exceeded)|too many requests|insufficient|credits?|лимит/i
+
+/** Ошибку можно обойти другой моделью пула: сбой, перегрузка, квота, нет доступа. Ошибки самого запроса — нельзя. */
+function failoverAllowed(failure) {
+  if (failure.status === 499 || failure.code === 'aborted') return false
+  if (['invalid_request', 'context_length_exceeded'].includes(failure.code)) return false
+  return ![400, 413, 422].includes(failure.status)
+}
+
+function quotaFailure(failure) {
+  return failure.status === 429 || failure.code === 'rate_limit' || failure.code === 'rate_limit_error' || QUOTA_TEXT.test(failure.text ?? '')
+}
+
+function failureReason(failure) {
+  if (quotaFailure(failure)) return 'лимит'
+  return failure.status ? `HTTP ${failure.status}` : 'сбой'
+}
 
 const USAGE_FRESH_MS = 5 * 60 * 1000
 const MODEL_FRESH_MS = USAGE_FRESH_MS

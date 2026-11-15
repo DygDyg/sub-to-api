@@ -40,6 +40,9 @@ const EMPTY = {
       llm: { enabled: false, model: '', timeoutMs: 1500 },
     },
     modelTiers: {},
+    proxy: { enabled: false, url: '' },
+    providerProxies: {},
+    customProviders: [],
   },
   accounts: {},
   requests: [],
@@ -64,6 +67,15 @@ export class Store {
         llm: { ...EMPTY.settings.complexity.llm, ...(parsed.settings?.complexity?.llm ?? {}) },
       }
       if (!settings.modelTiers || typeof settings.modelTiers !== 'object') settings.modelTiers = {}
+      const proxy = parsed.settings?.proxy
+      settings.proxy = { enabled: Boolean(proxy?.enabled), url: typeof proxy?.url === 'string' ? proxy.url : '' }
+      const perProvider = parsed.settings?.providerProxies
+      settings.providerProxies = perProvider && typeof perProvider === 'object' && !Array.isArray(perProvider)
+        ? Object.fromEntries(Object.entries(perProvider).filter(([, value]) => typeof value === 'string' && value.trim()))
+        : {}
+      settings.customProviders = Array.isArray(parsed.settings?.customProviders)
+        ? parsed.settings.customProviders.filter((item) => item && typeof item === 'object' && typeof item.id === 'string')
+        : []
       if (parsed.settings?.settingsExposure === undefined && parsed.settings?.remoteSettings) settings.settingsExposure = 'lan'
       if (parsed.settings?.apiKeyScope === undefined) settings.apiKeyScope = parsed.settings?.authMode === 'optional' ? 'none' : 'localhost'
       return {

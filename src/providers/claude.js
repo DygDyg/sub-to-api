@@ -33,7 +33,7 @@ function headers(session) {
 
 export class ClaudeProvider extends SessionProvider {
   #refreshes = new Map()
-  constructor(store, options = {}) { super(store, 'claude', 'Claude'); this.fetch = options.fetch ?? options.fetchFn ?? globalThis.fetch }
+  constructor(store, options = {}) { super(store, 'claude', 'Claude'); this.fetch = options.fetch ?? options.fetchFn ?? this.fetch }
   oauthSpec() {
     return { callbackPath: '/callback', ports: [0], host: 'localhost', buildAuthorizeUrl({ redirectUri, state, pkce }) {
       return `https://claude.ai/oauth/authorize?${new URLSearchParams({ code: 'true', client_id: CLIENT_ID, response_type: 'code', redirect_uri: redirectUri, scope: SCOPE, code_challenge: pkce.challenge, code_challenge_method: 'S256', state })}`

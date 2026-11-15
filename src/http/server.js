@@ -8,6 +8,7 @@ import { chatCompletionToCanonical, collectChatCompletion, writeChatStream } fro
 import { APP_VERSION } from '../version.js'
 import { complexityOf, normalizeComplexity } from '../complexity.js'
 import { API_KEY_SCOPES, allowedByExposure, apiKeyRequired, apiKeyScopeOf, apiKeysOf, canReachSettings, hostFor, isInternetAddress, lanAddresses, normalizeExposure, normalizeSettingsKeyScope, settingsExposureOf, settingsKeyMustBeSet, settingsKeyRequired, widerExposure } from '../network.js'
+import { DIRECT, normalizeProxyValue, testProxy } from '../proxy.js'
 
 export const QUIET_HOLD_MS = 25_000
 export const QUIET_HOLD_LIMIT = 32
@@ -156,6 +157,8 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
       throw Object.assign(new Error(`Порт ${port} уже занят`), { status: 409 })
     }
     const complexity = body.complexity === undefined ? undefined : normalizeComplexity(body.complexity, current.settings.complexity)
+    const proxy = body.proxy === undefined ? undefined : normalizeProxySettings(body.proxy)
+    const providerProxies = body.providerProxies === undefined ? undefined : normalizeProviderProxies(body.providerProxies)
     const apiKeys = resolveApiKeys(body, current.settings)
     const apiKey = apiKeys[0]?.key ?? ''
     let settingsKey = current.settings.settingsKey || ''
@@ -182,6 +185,8 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
       if (body.saveFullRequest !== undefined) state.settings.saveFullRequest = Boolean(body.saveFullRequest)
       if (body.updateCheck !== undefined) state.settings.updateCheck = Boolean(body.updateCheck)
       if (complexity) state.settings.complexity = complexity
+      if (proxy) state.settings.proxy = proxy
+      if (providerProxies) state.settings.providerProxies = providerProxies
     })
     runtime.configuredPort = port
     runtime.exposure = exposure
@@ -190,16 +195,31 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
     runtime.settingsKeyScope = settingsKeyScope
     const urlAfter = `${originWithPort(request, port, runtime.port)}/`
     if (port !== runtime.port || host !== runtime.host) response.once('finish', () => hooks.rebind?.({ port, host, exposure }))
-    return send(response, 200, { port, host, exposure, authMode: apiKeyScope === 'none' ? 'optional' : 'required', apiKeyScope, apiKeys, settingsExposure, settingsKey, settingsKeyScope, apiKey, saveFullRequest: Boolean(current.settings.saveFullRequest || body.saveFullRequest), complexity: complexity ?? complexityOf(current.settings), url: urlAfter })
+    const fresh = proxy || providerProxies ? await store.read() : current
+    return send(response, 200, { port, host, exposure, authMode: apiKeyScope === 'none' ? 'optional' : 'required', apiKeyScope, apiKeys, settingsExposure, settingsKey, settingsKeyScope, apiKey, saveFullRequest: Boolean(current.settings.saveFullRequest || body.saveFullRequest), complexity: complexity ?? complexityOf(current.settings), proxy: fresh.settings.proxy, providerProxies: fresh.settings.providerProxies, url: urlAfter })
   }
+  if (request.method === 'POST' && url.pathname === '/api/proxy/test') {
+    const body = (await readJson(request)) ?? {}
+    const urlToTest = body.url === undefined ? (await store.read()).settings.proxy?.url : normalizeProxyValue(body.url)
+    if (!urlToTest) throw Object.assign(new Error('Укажите адрес прокси'), { status: 400 })
+    return send(response, 200, await testProxy(urlToTest))
+  }
+  if (request.method === 'GET' && url.pathname === '/api/custom-providers') return send(response, 200, await service.customProviders())
+  if (request.method === 'POST' && url.pathname === '/api/custom-providers/test') return send(response, 200, await service.testCustomProvider(await readJson(request)))
+  if (request.method === 'POST' && url.pathname === '/api/custom-providers') return send(response, 200, await service.saveCustomProvider(await readJson(request)))
+  const customProvider = /^\/api\/custom-providers\/([a-z0-9_-]+)$/.exec(url.pathname)
+  if (customProvider && request.method === 'DELETE') return send(response, 200, await service.deleteCustomProvider(customProvider[1]))
   if (request.method === 'GET' && url.pathname === '/api/model-tiers') return send(response, 200, await service.modelTiers(request.signal))
-  if (request.method === 'POST' && url.pathname === '/api/model-tiers') return send(response, 200, await service.setModelTiers((await readJson(request))?.tiers))
+  if (request.method === 'POST' && url.pathname === '/api/model-tiers') {
+    const body = (await readJson(request)) ?? {}
+    return send(response, 200, await service.setModelTiers(body.tiers, body.classifierModel))
+  }
   if (request.method === 'GET' && url.pathname === '/api/pools') return send(response, 200, await service.pools())
   if (request.method === 'POST' && url.pathname === '/api/pools') return send(response, 200, await service.savePool(await readJson(request)))
   const pool = /^\/api\/pools\/([^/]+)$/.exec(url.pathname)
   if (pool && request.method === 'DELETE') return send(response, 200, await service.deletePool(decodeURIComponent(pool[1])))
   if (request.method === 'GET' && url.pathname === '/api/catalog') return send(response, 200, await service.catalog(request.signal, url.searchParams.get('refresh') === '1'))
-  const models = /^\/api\/providers\/([a-z]+)\/models$/.exec(url.pathname)
+  const models = /^\/api\/providers\/([a-z0-9_-]+)\/models$/.exec(url.pathname)
   if (models && request.method === 'GET') return send(response, 200, { data: await service.providerModels(models[1], request.signal, url.searchParams.get('refresh') === '1') })
   if (models && request.method === 'POST') return send(response, 200, await service.setProviderModels(models[1], (await readJson(request)).ids))
   if (request.method === 'GET' && url.pathname === '/api/requests/last') {
@@ -212,18 +232,18 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
   if (request.method === 'GET' && url.pathname === '/api/usage') {
     return send(response, 200, await service.usageAll(request.signal, url.searchParams.get('refresh') === '1'))
   }
-  const usage = /^\/api\/providers\/([a-z]+)\/usage$/.exec(url.pathname)
+  const usage = /^\/api\/providers\/([a-z0-9_-]+)\/usage$/.exec(url.pathname)
   if (request.method === 'GET' && usage) return send(response, 200, await service.usage(usage[1], request.signal, url.searchParams.get('refresh') === '1'))
-  const login = /^\/api\/providers\/([a-z]+)\/login$/.exec(url.pathname)
+  const login = /^\/api\/providers\/([a-z0-9_-]+)\/login$/.exec(url.pathname)
   if (login && request.method === 'POST') return send(response, 200, await service.beginLogin(login[1], await readJson(request)))
-  const complete = /^\/api\/providers\/([a-z]+)\/complete$/.exec(url.pathname)
+  const complete = /^\/api\/providers\/([a-z0-9_-]+)\/complete$/.exec(url.pathname)
   if (complete && request.method === 'POST') return send(response, 200, await service.completeLogin(complete[1], await readJson(request)))
-  const cancel = /^\/api\/providers\/([a-z]+)\/cancel$/.exec(url.pathname)
+  const cancel = /^\/api\/providers\/([a-z0-9_-]+)\/cancel$/.exec(url.pathname)
   if (cancel && request.method === 'POST') {
     service.cancelLogin(cancel[1])
     return send(response, 200, { ok: true })
   }
-  const account = /^\/api\/providers\/([a-z]+)\/accounts\/([^/]+)$/.exec(url.pathname)
+  const account = /^\/api\/providers\/([a-z0-9_-]+)\/accounts\/([^/]+)$/.exec(url.pathname)
   if (account && request.method === 'DELETE') {
     await service.removeAccount(account[1], decodeURIComponent(account[2]))
     return send(response, 200, { ok: true })
@@ -371,6 +391,28 @@ function presentedApiKey(request) {
   if (header.startsWith('Bearer ')) return header.slice('Bearer '.length)
   const apiKey = request.headers['x-api-key']
   return Array.isArray(apiKey) ? apiKey[0] : apiKey
+}
+
+/** @param {any} input */
+function normalizeProxySettings(input) {
+  if (!input || typeof input !== 'object') throw Object.assign(new Error('proxy: ожидается объект'), { status: 400 })
+  const enabled = Boolean(input.enabled)
+  const url = String(input.url ?? '').trim()
+  if (enabled && !url) throw Object.assign(new Error('Включите прокси только с адресом'), { status: 400 })
+  return { enabled, url: url ? normalizeProxyValue(url) : '' }
+}
+
+/** @param {any} input */
+function normalizeProviderProxies(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw Object.assign(new Error('providerProxies: ожидается объект'), { status: 400 })
+  const result = {}
+  for (const [id, value] of Object.entries(input)) {
+    if (!/^[a-z0-9_-]{1,32}$/.test(id)) throw Object.assign(new Error(`Некорректный провайдер в прокси: ${id}`), { status: 400 })
+    const normalized = normalizeProxyValue(value)
+    if (normalized && normalized !== DIRECT) result[id] = normalized
+    else if (normalized === DIRECT) result[id] = DIRECT
+  }
+  return result
 }
 
 function resolveApiKeyScope(body, settings) {

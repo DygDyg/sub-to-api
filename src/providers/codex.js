@@ -19,13 +19,13 @@ export class CodexProvider extends SessionProvider {
   }
 
   async exchange(callback) {
-    const response = await fetch(TOKEN_URL, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: callback.code, redirect_uri: callback.redirectUri, client_id: CLIENT_ID, code_verifier: callback.pkce.verifier }) })
+    const response = await this.fetch(TOKEN_URL, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: callback.code, redirect_uri: callback.redirectUri, client_id: CLIENT_ID, code_verifier: callback.pkce.verifier }) })
     if (!response.ok) throw await providerError(response, 'Codex OAuth')
     return normalize(await response.json())
   }
 
   async refresh(session) {
-    const response = await fetch(TOKEN_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_id: CLIENT_ID, grant_type: 'refresh_token', refresh_token: session.refreshToken }) })
+    const response = await this.fetch(TOKEN_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_id: CLIENT_ID, grant_type: 'refresh_token', refresh_token: session.refreshToken }) })
     if (!response.ok) throw await providerError(response, 'Codex refresh')
     return normalize(await response.json(), session)
   }
@@ -33,7 +33,7 @@ export class CodexProvider extends SessionProvider {
   async listModels(_account, signal) {
     const session = await this.session().catch(() => undefined)
     if (!session) return []
-    const response = await fetch('https://chatgpt.com/backend-api/codex/models?client_version=0.153.4', { headers: headers(session), signal })
+    const response = await this.fetch('https://chatgpt.com/backend-api/codex/models?client_version=0.153.4', { headers: headers(session), signal })
     if (!response.ok) throw await providerError(response, 'Codex models')
     const payload = await response.json()
     return (payload.models ?? []).filter((model) => model.visibility !== 'hide' && model.visibility !== 'none').map((model) => ({ id: model.slug, name: model.display_name || model.slug, description: model.description, contextWindow: model.context_window, efforts: model.supported_reasoning_levels?.map((level) => level.effort).filter(Boolean), supportsImages: true, supportsTools: true }))
@@ -42,7 +42,7 @@ export class CodexProvider extends SessionProvider {
   async usage(_account, signal) {
     const session = await this.session().catch(() => undefined)
     if (!session) return { supported: false, windows: [], fetchedAt: Date.now() }
-    const response = await fetch('https://chatgpt.com/backend-api/wham/usage', { headers: headers(session), signal })
+    const response = await this.fetch('https://chatgpt.com/backend-api/wham/usage', { headers: headers(session), signal })
     if (!response.ok) return { supported: true, windows: [], error: `HTTP ${response.status}`, fetchedAt: Date.now() }
     const payload = await response.json()
     const windows = [windowOf(payload.rate_limit?.primary_window, 'session'), windowOf(payload.rate_limit?.secondary_window, 'weekly')].filter(Boolean)
@@ -56,7 +56,7 @@ export class CodexProvider extends SessionProvider {
 
   async generateImage(input, signal) {
     const session = await this.session()
-    const response = await fetch('https://chatgpt.com/backend-api/codex/images/generations', {
+    const response = await this.fetch('https://chatgpt.com/backend-api/codex/images/generations', {
       method: 'POST',
       headers: { ...headers(session), 'content-type': 'application/json', originator: 'codex_cli_rs' },
       body: JSON.stringify({ prompt: input.prompt, model: 'gpt-image-2', ...(input.size ? { size: input.size } : {}), ...(input.quality ? { quality: input.quality } : {}) }),
@@ -67,7 +67,7 @@ export class CodexProvider extends SessionProvider {
   }
 
   async *streamWithSession(request, session) {
-    const response = await fetch('https://chatgpt.com/backend-api/codex/responses', {
+    const response = await this.fetch('https://chatgpt.com/backend-api/codex/responses', {
       method: 'POST', headers: { ...headers(session), 'content-type': 'application/json', accept: 'text/event-stream', originator: 'codex_cli_rs' }, signal: request.signal,
       body: JSON.stringify(codexResponsesBody(request)),
     })

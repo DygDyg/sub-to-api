@@ -46,6 +46,7 @@ async function main() {
     new AntigravityProvider(store),
   ])
   const service = new GatewayService(store, registry)
+  await service.reloadCustom()
   const runtime = {
     host,
     port: configuredPort,
