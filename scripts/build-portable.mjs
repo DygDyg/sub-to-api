@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -65,6 +66,7 @@ run(process.execPath, [
 run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'scripts', 'set-exe-icon.ps1'), '-Exe', executable, '-Icon', join(root, 'assets', 'icon.ico')])
 await hideConsole(executable)
 await copyFile(join(root, 'scripts', 'tray.ps1'), join(outputDir, 'tray.ps1'))
+await copyFile(join(root, 'scripts', 'update.ps1'), join(outputDir, 'update.ps1'))
 await copyFile(join(root, 'assets', 'icon.ico'), join(outputDir, 'icon.ico'))
 await copyFile(join(root, 'scripts', 'portable-start.bat'), join(outputDir, 'start.bat'))
 await copyFile(join(root, 'THIRD_PARTY_NOTICES.md'), join(outputDir, 'THIRD_PARTY_NOTICES.md'))
@@ -75,16 +77,23 @@ await writeFile(join(outputDir, 'README.txt'), `SubToAPI ${version}
 Интерфейс: http://127.0.0.1:8787
 OpenAI API: http://127.0.0.1:8787/v1
 
+Параметры запуска (для start.bat и sub-to-api.exe):
+  --console   показать окно консоли с логом сервера; закрытие окна останавливает сервер
+  --no-tray   не создавать иконку в трее
+Пример: start.bat --console --no-tray
 Node.js устанавливать не нужно. Эту папку можно целиком отправить другому человеку.
 Каждый запускает свой экземпляр и входит в свои подписки. Настройки и токены
 создаются в папке settings рядом с программой. Эту папку не нужно отправлять
 вместе с программой: в ней ключи входа.
 `, 'utf8')
 const archive = await zipPortable(version)
+const archiveHash = createHash('sha256').update(await readFile(archive)).digest('hex')
+await writeFile(join(root, 'release', 'SHA256SUMS.txt'), `${archiveHash}  ${basename(archive)}\n`, 'utf8')
 await writeFile(join(root, 'release', 'RELEASE_NOTES.txt'), `Портативная сборка Windows ${version}.
 
 Распакуйте архив и запустите start.bat. Node.js устанавливать не нужно.
 Папка settings в архив не входит: токены создаются локально при первом запуске.
+Начиная с этой версии программа сама сообщает о новых релизах и обновляется по кнопке в интерфейсе.
 `, 'utf8')
 console.log(`Готово: ${outputDir}`)
 console.log(`Архив: ${archive}`)
@@ -116,7 +125,7 @@ async function zipPortable(version) {
   await rm(stageRoot, { recursive: true, force: true })
   await rm(archive, { force: true })
   await mkdir(stage, { recursive: true })
-  for (const name of ['sub-to-api.exe', 'start.bat', 'tray.ps1', 'icon.ico', 'README.txt', 'THIRD_PARTY_NOTICES.md']) {
+  for (const name of ['sub-to-api.exe', 'start.bat', 'tray.ps1', 'update.ps1', 'icon.ico', 'README.txt', 'THIRD_PARTY_NOTICES.md']) {
     await copyFile(join(outputDir, name), join(stage, name))
   }
   run('tar.exe', ['-a', '-c', '-f', archive, '-C', stageRoot, 'SubToAPI'])

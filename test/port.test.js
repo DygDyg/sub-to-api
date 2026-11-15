@@ -4,6 +4,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
+import { request as httpRequest } from 'node:http'
 import { QUIET_HOLD_MS, createAppServer } from '../src/http/server.js'
 import { apiKeyRequired, canReachSettings, isInternetAddress, settingsKeyMustBeSet, settingsKeyRequired } from '../src/network.js'
 import { Store } from '../src/storage/store.js'
@@ -132,6 +133,46 @@ test('port changes reject occupied ports, accept same port and preserve effectiv
   } finally {
     server.closeAllConnections()
     await Promise.all([new Promise(resolve => server.close(resolve)), new Promise(resolve => occupied.close(resolve))])
+  }
+})
+
+test('overview and port changes keep the host the page was opened with', async () => {
+  const state = { settings: { port: 8787, exposure: 'lan', authMode: 'optional', apiKeyScope: 'none', settingsExposure: 'lan', settingsKeyScope: 'internet' } }
+  const store = { read: async () => structuredClone(state), update: async fn => fn(state) }
+  const runtime = { host: '0.0.0.0', port: 0, exposure: 'lan', settingsExposure: 'lan', settingsKeyScope: 'internet' }
+  const service = { overview: async () => ({ settings: structuredClone(state.settings), providers: [], requests: [], activeRequests: 0 }) }
+  const server = createAppServer(service, store, runtime, { rebind: () => {} })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  runtime.port = server.address().port
+  const base = `http://127.0.0.1:${runtime.port}`
+  const lanHost = `192.168.1.50:${runtime.port}`
+  const call = (path, { headers = {}, body } = {}) => new Promise((resolve, reject) => {
+    const request = httpRequest({ host: '127.0.0.1', port: runtime.port, path, method: body ? 'POST' : 'GET', headers: body ? { 'content-type': 'application/json', ...headers } : headers }, (response) => {
+      let text = ''
+      response.setEncoding('utf8')
+      response.on('data', chunk => { text += chunk })
+      response.on('end', () => { try { resolve(JSON.parse(text)) } catch (error) { reject(error) } })
+    })
+    request.on('error', reject)
+    request.end(body ? JSON.stringify(body) : undefined)
+  })
+  try {
+    assert.equal((await call('/api/overview')).settings.url, base)
+    assert.equal((await call('/api/overview', { headers: { host: lanHost } })).settings.url, `http://${lanHost}`)
+    const proxied = await call('/api/overview', { headers: { host: lanHost, 'x-forwarded-host': 'api.example.com', 'x-forwarded-proto': 'https' } })
+    assert.equal(proxied.settings.url, 'https://api.example.com')
+
+    const same = await call('/api/settings', { headers: { host: lanHost }, body: { port: runtime.port } })
+    assert.equal(same.url, `http://${lanHost}/`)
+    const free = createServer()
+    await new Promise(resolve => free.listen(0, '0.0.0.0', resolve))
+    const nextPort = free.address().port
+    await new Promise(resolve => free.close(resolve))
+    const moved = await call('/api/settings', { headers: { host: lanHost }, body: { port: nextPort } })
+    assert.equal(moved.url, `http://192.168.1.50:${nextPort}/`)
+  } finally {
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
   }
 })
 

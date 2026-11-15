@@ -1,19 +1,34 @@
 import { spawn } from 'node:child_process'
-import { appendFileSync, existsSync, openSync, mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, openSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { format } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { isSea } from 'node:sea'
-import { hostFor, normalizeExposure, normalizeSettingsKeyScope, settingsExposureOf, widerExposure } from './network.js'
+import { hostFor, lanAddresses, normalizeExposure, normalizeSettingsKeyScope, settingsExposureOf, widerExposure } from './network.js'
 import { clearRuntime, writeRuntime } from './runtime.js'
 import { APP_DIR, Store } from './storage/store.js'
 import { ProviderRegistry } from './gateway/registry.js'
 import { GatewayService } from './gateway/service.js'
 import { createAppServer } from './http/server.js'
+import { Updater } from './update.js'
 import { CodexProvider } from './providers/codex.js'
 import { ClaudeProvider } from './providers/claude.js'
 import { GrokProvider } from './providers/grok.js'
 import { CopilotProvider } from './providers/copilot.js'
 import { AntigravityProvider } from './providers/antigravity.js'
+
+// Параметры запуска:
+//   --console  показать окно консоли с логом (портативная сборка собрана без консоли)
+//   --no-tray  не создавать иконку в трее
+// Те же флаги можно задать переменными SUB_TO_API_CONSOLE=1 и SUB_TO_API_NO_TRAY=1.
+const launchArgs = new Set(process.argv.slice(2))
+const options = {
+  console: launchArgs.has('--console') || process.env.SUB_TO_API_CONSOLE === '1',
+  tray: !launchArgs.has('--no-tray') && process.env.SUB_TO_API_NO_TRAY !== '1',
+}
+const RESTART_ARGS = ['--console', '--no-tray'].filter((flag) => launchArgs.has(flag))
+// Портативный exe собран без консоли. Если её нет, лог пишется в файл и показывается в отдельном окне.
+const consoleWindow = options.console && !process.stdout.isTTY ? openConsoleWindow() : undefined
 
 async function main() {
   const store = new Store()
@@ -41,7 +56,25 @@ async function main() {
     settingsKeyScope: normalizeSettingsKeyScope(state.settings.settingsKeyScope),
   }
   let tray
-  const server = createAppServer(service, store, runtime, {
+  let server
+  const shutdown = async () => {
+    updater.stop()
+    tray?.kill()
+    consoleWindow?.removeAllListeners('exit')
+    consoleWindow?.kill()
+    await clearRuntime().catch(() => undefined)
+    server.closeAllConnections?.()
+    server.close()
+    process.exit(0)
+  }
+  const updater = new Updater({
+    dir: APP_DIR,
+    enabled: async () => (await store.read()).settings.updateCheck !== false,
+    launchArgs: RESTART_ARGS,
+  })
+  server = createAppServer(service, store, runtime, {
+    updater,
+    exit: shutdown,
     rebind: async ({ port, host: nextHost, exposure: nextExposure }) => {
       server.closeAllConnections?.()
       await new Promise((resolve) => server.close(resolve))
@@ -51,7 +84,7 @@ async function main() {
       tray?.kill()
       tray = startTray(runtime.port)
       await writeRuntime({ pid: process.pid, trayPid: tray?.pid, host: runtime.host, port: runtime.port, configuredPort: port })
-      console.log(`SubToAPI: http://127.0.0.1:${runtime.port}`)
+      printAddresses(runtime.host, runtime.port)
     },
   })
 
@@ -59,19 +92,50 @@ async function main() {
   if (runtime.port !== configuredPort) {
     console.error(`Порт ${configuredPort} занят. Сервер запущен на ${runtime.port}; смените порт в настройках.`)
   }
-  console.log(`SubToAPI: http://${host}:${runtime.port}`)
+  printAddresses(host, runtime.port)
   console.log('OpenAI base URL: /v1')
 
   tray = startTray(runtime.port)
   await writeRuntime({ pid: process.pid, trayPid: tray?.pid, host, port: runtime.port, configuredPort })
-  const shutdown = async () => {
-    tray?.kill()
-    await clearRuntime()
-    server.close()
-    process.exit(0)
-  }
+  updater.start()
+  // Закрытие окна консоли останавливает сервер, как у обычного консольного приложения.
+  consoleWindow?.once('exit', shutdown)
   process.once('SIGINT', shutdown)
   process.once('SIGTERM', shutdown)
+}
+
+function printAddresses(host, port) {
+  const local = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host
+  console.log(`SubToAPI: http://${local}:${port}`)
+  if (local !== host) {
+    for (const ip of lanAddresses()) console.log(`SubToAPI (сеть): http://${ip}:${port}`)
+  }
+}
+
+function openConsoleWindow() {
+  if (process.platform !== 'win32') return undefined
+  const logPath = join(APP_DIR, 'console.log')
+  try {
+    mkdirSync(APP_DIR, { recursive: true })
+    writeFileSync(logPath, '')
+  } catch {
+    return undefined
+  }
+  const write = (...args) => {
+    try { appendFileSync(logPath, `${format(...args)}\n`) } catch { /* log is best-effort */ }
+  }
+  console.log = write
+  console.info = write
+  console.warn = write
+  console.error = write
+  process.on('uncaughtExceptionMonitor', (error) => write(error?.stack || String(error)))
+  const powershell = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const viewer = spawn(existsSync(powershell) ? powershell : 'powershell.exe', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+    "$Host.UI.RawUI.WindowTitle = 'SubToAPI'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Content -LiteralPath $env:SUB_TO_API_CONSOLE_LOG -Wait -Encoding UTF8",
+  ], { windowsHide: false, stdio: 'ignore', env: { ...process.env, SUB_TO_API_CONSOLE_LOG: logPath } })
+  viewer.on('error', (error) => write(`Не удалось открыть консоль: ${error.message}`))
+  return viewer
 }
 
 function listen(server, port, host) {
@@ -90,7 +154,7 @@ function listen(server, port, host) {
 }
 
 function startTray(port) {
-  if (process.env.SUB_TO_API_NO_TRAY === '1' || process.platform !== 'win32') return undefined
+  if (!options.tray || process.platform !== 'win32') return undefined
   const script = isSea()
     ? join(dirname(process.execPath), 'tray.ps1')
     : join(dirname(fileURLToPath(import.meta.url)), '../scripts/tray.ps1')

@@ -12,6 +12,8 @@
     .sidebar { width: 240px; flex: none; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
     nav.tabs { flex: none; min-height: 0; overflow: auto; }
     .side-limits { flex: 1; min-height: 0; overflow: auto; padding: .75rem .75rem 1rem; border-top: 1px solid var(--bs-border-color); }
+    .update-banner { flex: none; margin: auto .6rem 0; padding: .6rem .7rem; border: 1px solid var(--bs-success-border-subtle); border-radius: .5rem; background: var(--bs-success-bg-subtle); }
+    .update-banner:not([hidden]) + .sidebar-version { margin-top: .5rem; }
     .sidebar-version { flex: none; margin-top: auto; padding: .7rem .9rem; border-top: 1px solid var(--bs-border-color); font-size: .72rem; color: var(--bs-secondary-color); font-variant-numeric: tabular-nums; }
     .side-limits-title { margin: 0 0 .65rem; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--bs-secondary-color); }
     .side-limit + .side-limit { margin-top: .85rem; }
@@ -96,6 +98,7 @@
       .sidebar { width: 100%; height: auto; min-height: 0; z-index: 1030; flex-direction: row; flex-wrap: wrap; align-items: center; }
       .side-limits { width: 100%; flex: none; max-height: 8.5rem; }
       .sidebar-version { width: 100%; margin-top: 0; }
+      .update-banner { width: 100%; margin: .5rem; }
       .brand small { display: none; }
       nav.tabs { flex-direction: row !important; flex-wrap: nowrap; }
       nav.tabs .nav-link { width: auto; white-space: nowrap; }
@@ -123,6 +126,14 @@
         <a class="nav-link" href="#docs" data-tab="docs"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M6 19a2 2 0 0 1 2-2h11"/></svg>Документация</a>
       </nav>
       <div id="side-limits" class="side-limits" hidden></div>
+      <div id="update-banner" class="update-banner" hidden>
+        <div class="small fw-semibold">Доступна <span id="update-version"></span></div>
+        <div class="d-flex gap-2 mt-2">
+          <button type="button" id="update-install" class="btn btn-primary btn-sm">Обновить</button>
+          <a id="update-notes" class="btn btn-outline-secondary btn-sm" target="_blank" rel="noopener">Что нового</a>
+        </div>
+        <div id="update-status" class="small text-body-secondary mt-1"></div>
+      </div>
       <div id="app-version" class="sidebar-version"></div>
     </aside>
     <div class="flex-grow-1 min-w-0">
@@ -289,6 +300,75 @@
                 </div>
               </article>
             </div>
+            <div class="col-12">
+              <article class="card shadow-sm">
+                <div class="card-body">
+                  <h2 class="h5 mb-3">Обновления</h2>
+                  <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                    <div class="form-check form-switch mb-0">
+                      <input class="form-check-input" id="update-check" type="checkbox" role="switch">
+                      <label class="form-check-label" for="update-check">Проверять обновления автоматически</label>
+                    </div>
+                    <button type="button" id="update-check-now" class="btn btn-outline-secondary">Проверить сейчас</button>
+                  </div>
+                  <p id="update-info" class="text-body-secondary small mb-0 mt-3"></p>
+                </div>
+              </article>
+            </div>
+            <div class="col-12">
+              <article class="card shadow-sm" id="complexity-card">
+                <div class="card-body vstack gap-3">
+                  <div>
+                    <h2 class="h5 mb-1">Выбор модели по сложности</h2>
+                    <p class="text-body-secondary small mb-0">Когда включён хотя бы один режим, в пулах появляется условие «По сложности запроса». Уровень моделей (light, medium, heavy) задаётся во вкладке «Модели» или через API, см. «Документацию».</p>
+                  </div>
+                  <div class="row g-3">
+                    <div class="col-lg-6">
+                      <div class="border rounded p-3 vstack gap-2 h-100">
+                        <div class="form-check form-switch mb-0">
+                          <input class="form-check-input" id="cx-heuristic" type="checkbox" role="switch">
+                          <label class="form-check-label fw-semibold" for="cx-heuristic">Эвристики</label>
+                        </div>
+                        <p class="text-body-secondary small mb-0">Мгновенно и без расхода лимита: длина и объём контекста, код, инструменты, reasoning_effort, ключевые слова. Счёт не ниже порога heavy — heavy, не ниже порога medium — medium, иначе light.</p>
+                        <div class="row g-2">
+                          <div class="col-6">
+                            <label class="form-label small mb-1" for="cx-medium-at">Порог medium</label>
+                            <input id="cx-medium-at" class="form-control form-control-sm" type="number" step="1" min="-50" max="50">
+                          </div>
+                          <div class="col-6">
+                            <label class="form-label small mb-1" for="cx-heavy-at">Порог heavy</label>
+                            <input id="cx-heavy-at" class="form-control form-control-sm" type="number" step="1" min="-50" max="50">
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="col-lg-6">
+                      <div class="border rounded p-3 vstack gap-2 h-100">
+                        <div class="form-check form-switch mb-0">
+                          <input class="form-check-input" id="cx-llm" type="checkbox" role="switch">
+                          <label class="form-check-label fw-semibold" for="cx-llm">LLM-классификатор</label>
+                        </div>
+                        <p class="text-body-secondary small mb-0">Перед запросом дешёвая модель отвечает одним словом. Точнее на коротких сложных вопросах, но добавляет задержку и тратит её лимит. При ошибке или таймауте используются эвристики.</p>
+                        <div class="row g-2">
+                          <div class="col-8">
+                            <label class="form-label small mb-1" for="cx-llm-model">Модель</label>
+                            <select id="cx-llm-model" class="form-select form-select-sm"></select>
+                          </div>
+                          <div class="col-4">
+                            <label class="form-label small mb-1" for="cx-llm-timeout">Таймаут, мс</label>
+                            <input id="cx-llm-timeout" class="form-control form-control-sm" type="number" step="100" min="300" max="10000">
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                    <p id="cx-status" class="text-body-secondary small mb-0"></p>
+                    <button type="button" id="cx-save" class="btn btn-primary">Сохранить режимы</button>
+                  </div>
+                </div>
+              </article>
+            </div>
           </form>
         </section>
 
@@ -320,8 +400,21 @@
                   <select id="pool-strategy" class="form-select" name="strategy">
                     <option value="most-remaining">Где больше остаток</option>
                     <option value="first-available">Первая с оставшимся лимитом</option>
+                    <option value="by-complexity" hidden>По сложности запроса</option>
                   </select>
                 </div>
+              </div>
+              <div id="pool-complexity" class="border rounded p-3 vstack gap-2" hidden>
+                <div class="row g-2 align-items-end">
+                  <div class="col-md-6">
+                    <label class="form-label" for="pool-classifier">Классификатор</label>
+                    <select id="pool-classifier" class="form-select" name="classifier"></select>
+                  </div>
+                  <div class="col-md-6">
+                    <p class="text-body-secondary small mb-0">Сначала модели нужного уровня, потом соседние. Внутри уровня — где больше остаток. Уровни задаются во вкладке «Модели».</p>
+                  </div>
+                </div>
+                <p id="pool-complexity-note" class="small mb-0"></p>
               </div>
               <div class="d-flex justify-content-between align-items-start gap-3">
                 <div>
@@ -392,6 +485,23 @@
             <a id="docs-base" class="form-control font-monospace" href="/v1" target="_blank" rel="noopener">/v1</a>
             <button type="button" class="btn btn-outline-secondary btn-icon" data-copy-target="docs-base" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
           </div>
+          <article class="card shadow-sm mb-3">
+            <div class="card-body vstack gap-3">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <h2 class="h5 mb-0">Стартовый промт для ИИ: уровни моделей</h2>
+                <div class="d-flex align-items-center gap-2">
+                  <div class="form-check form-switch mb-0">
+                    <input class="form-check-input" id="prompt-real-keys" type="checkbox" role="switch">
+                    <label class="form-check-label small" for="prompt-real-keys">Подставить реальные ключи</label>
+                  </div>
+                  <button type="button" id="copy-tiers-prompt" class="btn btn-outline-secondary btn-sm">Копировать</button>
+                </div>
+              </div>
+              <p class="text-body-secondary small mb-0">Скопируйте и отдайте модели: она прочитает список моделей, расставит уровни light / medium / heavy и сохранит их одним запросом. По умолчанию ключи — плейсхолдеры, чтобы случайно не скопировать секрет. Реальные ключи подставляются только при заданном ключе настроек.</p>
+              <pre id="tiers-prompt" class="border rounded p-3 small mb-0 overflow-auto" style="max-height:24rem;white-space:pre-wrap"></pre>
+              <p class="text-body-secondary small mb-0">Уровень отдельного запроса можно задать вручную: заголовок <code>x-complexity: light|medium|heavy</code> или поле <code>"complexity"</code> в теле <code>/v1/chat/completions</code>. Чтобы пул выбирал модель по уровню, включите режим в «Настройках» и создайте пул с условием «По сложности запроса».</p>
+            </div>
+          </article>
           <div class="row g-3 mb-3">
             <div class="col-md-6">
               <article class="card h-100 shadow-sm">
@@ -473,6 +583,16 @@
                 <a id="docs-settings" class="form-control font-monospace" href="/" target="_blank" rel="noopener">/</a>
                 <button type="button" class="btn btn-outline-secondary btn-icon" data-copy-target="docs-settings" title="Копировать" aria-label="Копировать"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button>
               </div>
+              <h3 class="h6 mt-3 mb-2">Как открыть настройки из интернета</h3>
+              <ol class="small mb-2">
+                <li>На вкладке «Настройки» задайте <strong>ключ настроек</strong> (кнопка «Новый ключ» создаст случайный) и сохраните.</li>
+                <li>Сервер должен слушать сеть, а не только этот компьютер: в «Сеть» или «Доступ к настройкам» выберите локальную сеть или интернет. При обоих «Только этот компьютер» снаружи до сервера не достучаться.</li>
+                <li>На роутере пробросьте порт сервера на этот компьютер и разрешите его в брандмауэре Windows.</li>
+                <li>Откройте <code>http://внешний-адрес:порт/?settings=ключ</code> — ссылка выше, замените в ней хост на внешний IP или домен.</li>
+                <li>Сервер запомнит ключ в cookie на 30 дней и уберёт его из адресной строки. Дальше страница открывается без параметра.</li>
+              </ol>
+              <p class="text-body-secondary small mb-2">Без ключа или с неверным ключом сервер на запросы из интернета не отвечает: соединение висит около 25 секунд и закрывается. Сканеры видят просто таймаут и не узнают, что тут что-то есть. Ключ работает, даже если доступ к настройкам ограничен этим компьютером или локальной сетью.</p>
+              <p class="text-body-secondary small mb-0">Ключ в ссылке передаётся открытым текстом по HTTP — не публикуйте её и смените ключ, если она утекла. Если сервер стоит за туннелем или прокси на этом же компьютере, внешние запросы выглядят локальными, и защита ключом не срабатывает.</p>
             </div>
           </div>
           <p class="text-body-secondary small mb-0">Другие пути <code>/v1</code> возвращают 404. Страницу настроек можно открыть только с этого компьютера, из локальной сети или из интернета — отдельно от API. Снаружи без параметра <code>settings</code> страница не отвечает. С этого компьютера ключ не спрашивается.</p>

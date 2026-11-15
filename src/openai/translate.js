@@ -11,7 +11,17 @@ export function chatCompletionToCanonical(body, headers) {
     promptCacheKey: cacheKey(body.prompt_cache_key ?? headerValue(headers, 'x-prompt-cache-key')),
     messages: body.messages.map(normalizeMessage),
     tools: Array.isArray(body.tools) ? body.tools.flatMap(normalizeTool) : undefined,
+    complexityOverride: complexityOverride(body.complexity ?? headerValue(headers, 'x-complexity')),
   }
+}
+
+function complexityOverride(value) {
+  if (value === undefined || value === null || value === '') return undefined
+  const tier = String(value).trim().toLowerCase()
+  if (!['light', 'medium', 'heavy'].includes(tier)) {
+    throw Object.assign(new Error('complexity должен быть light, medium или heavy'), { status: 400, code: 'invalid_request' })
+  }
+  return tier
 }
 
 function normalizeMessage(message) {

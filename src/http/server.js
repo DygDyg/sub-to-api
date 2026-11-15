@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { isSea, getAsset } from 'node:sea'
 import { chatCompletionToCanonical, collectChatCompletion, writeChatStream } from '../openai/translate.js'
 import { APP_VERSION } from '../version.js'
+import { complexityOf, normalizeComplexity } from '../complexity.js'
 import { API_KEY_SCOPES, allowedByExposure, apiKeyRequired, apiKeyScopeOf, apiKeysOf, canReachSettings, hostFor, isInternetAddress, lanAddresses, normalizeExposure, normalizeSettingsKeyScope, settingsExposureOf, settingsKeyMustBeSet, settingsKeyRequired, widerExposure } from '../network.js'
 
 export const QUIET_HOLD_MS = 25_000
@@ -102,10 +103,22 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
     overview.settings.settingsExposure = settingsExposureOf(runtime)
     overview.settings.settingsKey = runtime.settingsKey || ''
     overview.settings.settingsKeyScope = normalizeSettingsKeyScope(runtime.settingsKeyScope)
-    overview.settings.url = `http://127.0.0.1:${runtime.port}`
+    overview.settings.url = originFor(request, runtime.port)
     overview.settings.lanAddresses = lanAddresses()
     overview.version = APP_VERSION
     return send(response, 200, overview)
+  }
+  if (request.method === 'GET' && url.pathname === '/api/update') {
+    if (!hooks.updater) return send(response, 200, { supported: false, current: APP_VERSION, available: false, state: 'idle' })
+    return send(response, 200, await hooks.updater.status())
+  }
+  if (request.method === 'POST' && url.pathname === '/api/update/check') {
+    if (!hooks.updater) return send(response, 200, { supported: false, current: APP_VERSION, available: false, state: 'idle' })
+    return send(response, 200, await hooks.updater.check({ force: true }))
+  }
+  if (request.method === 'POST' && url.pathname === '/api/update/install') {
+    if (!hooks.updater) throw Object.assign(new Error('Обновление недоступно'), { status: 400 })
+    return send(response, 200, await hooks.updater.install({ pid: process.pid, port: runtime.port, exit: () => hooks.exit?.() }))
   }
   if (request.method === 'GET' && url.pathname === '/api/journal') return send(response, 200, await service.journal())
   if (request.method === 'GET' && url.pathname === '/api/stats') {
@@ -142,6 +155,7 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
     if (port !== runtime.port && !await portAvailable(port, host)) {
       throw Object.assign(new Error(`Порт ${port} уже занят`), { status: 409 })
     }
+    const complexity = body.complexity === undefined ? undefined : normalizeComplexity(body.complexity, current.settings.complexity)
     const apiKeys = resolveApiKeys(body, current.settings)
     const apiKey = apiKeys[0]?.key ?? ''
     let settingsKey = current.settings.settingsKey || ''
@@ -166,16 +180,20 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
       state.settings.remoteSettings = settingsExposure !== 'localhost'
       state.settings.apiKey = apiKey
       if (body.saveFullRequest !== undefined) state.settings.saveFullRequest = Boolean(body.saveFullRequest)
+      if (body.updateCheck !== undefined) state.settings.updateCheck = Boolean(body.updateCheck)
+      if (complexity) state.settings.complexity = complexity
     })
     runtime.configuredPort = port
     runtime.exposure = exposure
     runtime.settingsExposure = settingsExposure
     runtime.settingsKey = settingsKey
     runtime.settingsKeyScope = settingsKeyScope
-    const urlAfter = `http://127.0.0.1:${port}/`
+    const urlAfter = `${originWithPort(request, port, runtime.port)}/`
     if (port !== runtime.port || host !== runtime.host) response.once('finish', () => hooks.rebind?.({ port, host, exposure }))
-    return send(response, 200, { port, host, exposure, authMode: apiKeyScope === 'none' ? 'optional' : 'required', apiKeyScope, apiKeys, settingsExposure, settingsKey, settingsKeyScope, apiKey, saveFullRequest: Boolean(current.settings.saveFullRequest || body.saveFullRequest), url: urlAfter })
+    return send(response, 200, { port, host, exposure, authMode: apiKeyScope === 'none' ? 'optional' : 'required', apiKeyScope, apiKeys, settingsExposure, settingsKey, settingsKeyScope, apiKey, saveFullRequest: Boolean(current.settings.saveFullRequest || body.saveFullRequest), complexity: complexity ?? complexityOf(current.settings), url: urlAfter })
   }
+  if (request.method === 'GET' && url.pathname === '/api/model-tiers') return send(response, 200, await service.modelTiers(request.signal))
+  if (request.method === 'POST' && url.pathname === '/api/model-tiers') return send(response, 200, await service.setModelTiers((await readJson(request))?.tiers))
   if (request.method === 'GET' && url.pathname === '/api/pools') return send(response, 200, await service.pools())
   if (request.method === 'POST' && url.pathname === '/api/pools') return send(response, 200, await service.savePool(await readJson(request)))
   const pool = /^\/api\/pools\/([^/]+)$/.exec(url.pathname)
@@ -225,6 +243,7 @@ async function handleOpenAI(service, store, url, request, response, onUnauthoriz
     response.setHeader('www-authenticate', 'Bearer')
     return send(response, 401, { error: { message: 'Invalid API key', type: 'authentication_error' } })
   }
+  if (request.method === 'GET' && url.pathname === '/v1/model-tiers') return send(response, 200, await service.modelTiers(request.signal))
   if (request.method === 'GET' && url.pathname === '/v1/models') return send(response, 200, await service.models(request.signal, url.searchParams.get('capability')))
   if (request.method === 'POST' && url.pathname === '/v1/images/generations') return send(response, 200, await service.generateImage(await readJson(request), request.signal))
   if (request.method === 'POST' && url.pathname === '/v1/videos') return send(response, 202, await service.startVideo(await readJson(request), request.signal))
@@ -238,6 +257,41 @@ async function handleOpenAI(service, store, url, request, response, onUnauthoriz
     return send(response, 200, await collectChatCompletion(canonical.model, events))
   }
   send(response, 404, { error: { message: 'Unknown OpenAI endpoint', type: 'invalid_request_error' } })
+}
+
+function headerValue(value) {
+  return String((Array.isArray(value) ? value[0] : value) ?? '').trim()
+}
+
+function parseHostHeader(raw) {
+  const value = headerValue(raw).split(',')[0].trim()
+  if (!value) return undefined
+  try {
+    const url = new URL(`http://${value}`)
+    if (!url.hostname) return undefined
+    const bare = url.hostname.includes(':') ? `[${url.hostname}]` : url.hostname
+    return { bare, authority: url.host }
+  } catch {
+    return undefined
+  }
+}
+
+/** Адрес, по которому клиент реально открыл страницу: localhost, адрес в сети или внешний. */
+function originFor(request, fallbackPort) {
+  const parsed = parseHostHeader(request.headers['x-forwarded-host']) ?? parseHostHeader(request.headers.host)
+  if (!parsed) return `http://127.0.0.1:${fallbackPort}`
+  const forwardedProto = headerValue(request.headers['x-forwarded-proto']).split(',')[0].trim().toLowerCase()
+  const proto = forwardedProto === 'https' ? 'https' : 'http'
+  return `${proto}://${parsed.authority}`
+}
+
+/** Тот же хост, но с другим портом — для перехода после смены порта. */
+function originWithPort(request, port, currentPort) {
+  const origin = originFor(request, currentPort)
+  const parsed = parseHostHeader(request.headers['x-forwarded-host']) ?? parseHostHeader(request.headers.host)
+  if (!parsed || port === currentPort) return origin
+  const proto = origin.startsWith('https://') ? 'https' : 'http'
+  return `${proto}://${parsed.bare}:${port}`
 }
 
 function portAvailable(port, host) {

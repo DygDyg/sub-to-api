@@ -33,7 +33,13 @@ const EMPTY = {
     requestLogLimit: 200,
     logPrompts: false,
     saveFullRequest: false,
+    updateCheck: true,
     enabledModels: {},
+    complexity: {
+      heuristic: { enabled: false, mediumAt: 1, heavyAt: 3 },
+      llm: { enabled: false, model: '', timeoutMs: 1500 },
+    },
+    modelTiers: {},
   },
   accounts: {},
   requests: [],
@@ -53,6 +59,11 @@ export class Store {
     try {
       const parsed = JSON.parse(await readFile(this.path, 'utf8'))
       const settings = { ...EMPTY.settings, ...(parsed.settings ?? {}) }
+      settings.complexity = {
+        heuristic: { ...EMPTY.settings.complexity.heuristic, ...(parsed.settings?.complexity?.heuristic ?? {}) },
+        llm: { ...EMPTY.settings.complexity.llm, ...(parsed.settings?.complexity?.llm ?? {}) },
+      }
+      if (!settings.modelTiers || typeof settings.modelTiers !== 'object') settings.modelTiers = {}
       if (parsed.settings?.settingsExposure === undefined && parsed.settings?.remoteSettings) settings.settingsExposure = 'lan'
       if (parsed.settings?.apiKeyScope === undefined) settings.apiKeyScope = parsed.settings?.authMode === 'optional' ? 'none' : 'localhost'
       return {

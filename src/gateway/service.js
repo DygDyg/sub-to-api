@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { apiKeyScopeOf, apiKeysOf, normalizeSettingsKeyScope, settingsExposureOf } from '../network.js'
 import { chooseMember, estimateTokens, fitsContext, normalizePool, remainingPercent } from '../pools.js'
+import { CLASSIFIER_PROMPT, TIERS, TIERS_GUIDE, TIER_INFO, classifyHeuristic, complexityOf, enabledClassifiers, lastUserText, normalizeTier, parseTier, tierOf, tierOrder } from '../complexity.js'
 import { priceEstimate, requestCost } from '../pricing.js'
 import { buildStats, recordUsage } from '../stats.js'
 import { LAST_REQUEST_PATH } from '../storage/store.js'
@@ -48,6 +49,9 @@ export class GatewayService {
         apiKey: state.settings.apiKey,
         apiKeyPreview: mask(state.settings.apiKey),
         saveFullRequest: Boolean(state.settings.saveFullRequest),
+        updateCheck: state.settings.updateCheck !== false,
+        complexity: complexityOf(state.settings),
+        classifiers: enabledClassifiers(state.settings),
       },
       providers,
       activeRequests: this.active.size,
@@ -155,13 +159,18 @@ export class GatewayService {
   /** @param {AbortSignal} [signal] @param {boolean} [refresh] */
   async catalog(signal, refresh = false) {
     const rows = []
+    const settings = (await this.store.read()).settings
+    const tiers = settings.modelTiers ?? {}
     for (const adapter of this.registry.list()) {
-      const enabled = (await this.store.read()).settings.enabledModels?.[adapter.id]
-      for (const model of await this.#cachedModels(adapter.id, 'chat', signal, refresh)) {
-        rows.push(catalogRow(adapter, model, 'chat', !Array.isArray(enabled) || enabled.includes(model.id)))
+      const enabled = settings.enabledModels?.[adapter.id]
+      const discovered = await this.#cachedModels(adapter.id, 'chat', signal, refresh).catch(() => [])
+      for (const model of discovered) {
+        const row = catalogRow(adapter, model, 'chat', !Array.isArray(enabled) || enabled.includes(model.id))
+        const tier = normalizeTier(tiers[row.id])
+        rows.push(tier ? { ...row, tier } : row)
       }
       if (typeof adapter.listMediaModels !== 'function') continue
-      for (const model of await this.#cachedModels(adapter.id, 'media', signal, refresh)) {
+      for (const model of await this.#cachedModels(adapter.id, 'media', signal, refresh).catch(() => [])) {
         rows.push(catalogRow(adapter, model, model.capability || 'image', true))
       }
     }
@@ -278,6 +287,63 @@ export class GatewayService {
     return this.registry.get('grok').videoStatus(id, signal)
   }
 
+  /** Чат-модели с уровнями сложности и инструкция для ИИ. @param {AbortSignal} [signal] */
+  async modelTiers(signal) {
+    const state = await this.store.read()
+    const tiers = state.settings.modelTiers ?? {}
+    const models = []
+    for (const adapter of this.registry.list()) {
+      const enabled = state.settings.enabledModels?.[adapter.id]
+      const discovered = await this.#cachedModels(adapter.id, 'chat', signal).catch(() => [])
+      for (const model of discovered) {
+        const id = `${adapter.id}/${model.id}`
+        const set = normalizeTier(tiers[id])
+        models.push({
+          id,
+          name: model.name || model.id,
+          provider: adapter.id,
+          enabled: !Array.isArray(enabled) || enabled.includes(model.id),
+          tier: set ?? 'medium',
+          tierSet: Boolean(set),
+          ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+          ...(model.efforts?.length ? { efforts: model.efforts } : {}),
+          ...(model.supportsTools !== undefined ? { supportsTools: model.supportsTools } : {}),
+          ...(model.supportsImages !== undefined ? { supportsImages: model.supportsImages } : {}),
+          ...priceFields(id),
+        })
+      }
+    }
+    return {
+      instructions: TIERS_GUIDE,
+      tiers: TIER_INFO,
+      assigned: Object.fromEntries(Object.entries(tiers).filter(([, value]) => normalizeTier(value))),
+      complexity: { ...complexityOf(state.settings), classifiers: enabledClassifiers(state.settings) },
+      models,
+    }
+  }
+
+  /** @param {Record<string, string | null>} map */
+  async setModelTiers(map) {
+    if (!map || typeof map !== 'object' || Array.isArray(map)) {
+      throw Object.assign(new Error('Ожидается {"tiers": {"provider/model": "light|medium|heavy|null"}}'), { status: 400 })
+    }
+    const entries = Object.entries(map)
+    if (entries.length > 2000) throw Object.assign(new Error('Слишком много моделей в одном запросе'), { status: 400 })
+    for (const [id, value] of entries) {
+      if (!/^[a-z]+\/\S+$/.test(id) || id.length > 200) throw Object.assign(new Error(`Некорректный id модели: ${id}`), { status: 400 })
+      if (value !== null && !normalizeTier(value)) throw Object.assign(new Error(`Уровень для ${id}: light, medium, heavy или null`), { status: 400 })
+    }
+    const state = await this.store.update((current) => {
+      const tiers = { ...(current.settings.modelTiers ?? {}) }
+      for (const [id, value] of entries) {
+        if (value === null) delete tiers[id]
+        else tiers[id] = normalizeTier(value)
+      }
+      current.settings.modelTiers = tiers
+    })
+    return { ok: true, tiers: state.settings.modelTiers }
+  }
+
   async pools() {
     return { data: (await this.store.read()).pools ?? [] }
   }
@@ -317,7 +383,8 @@ export class GatewayService {
       }
       return [route]
     }
-    const pool = ((await this.store.read()).pools ?? []).find((item) => item.id === request.model.slice(5))
+    const state = await this.store.read()
+    const pool = (state.pools ?? []).find((item) => item.id === request.model.slice(5))
     if (!pool) throw Object.assign(new Error('Пул не найден'), { status: 404 })
     const remaining = new Map()
     const windows = new Map()
@@ -336,17 +403,44 @@ export class GatewayService {
       if (!fits(member) || this.#cooled(member)) return 0
       return remaining.get(member)
     }
+    const stickyMember = stickyKey ? this.poolSticky.get(stickyKey) : undefined
+    let ordered = pool.members
+    let strategy = pool.strategy
+    let sticky = stickyMember
+    if (pool.strategy === 'by-complexity') {
+      const tiers = state.settings.modelTiers ?? {}
+      const continuing = request.messages?.at(-1)?.role === 'tool' && stickyMember && pool.members.includes(stickyMember)
+      const complexity = continuing && !request.complexityOverride
+        ? { tier: tierOf(tiers, stickyMember), score: null, by: 'sticky' }
+        : await this.#complexity(request, pool, state.settings)
+      if (complexity && !continuing && !request.complexityOverride && stickyMember && pool.members.includes(stickyMember)) {
+        const level = (tier) => TIERS.indexOf(tier)
+        const held = tierOf(tiers, stickyMember)
+        if (level(held) > level(complexity.tier)) Object.assign(complexity, { tier: held, by: `${complexity.by}+sticky` })
+      }
+      if (complexity) {
+        request.complexity = complexity
+        const order = tierOrder(complexity.tier)
+        const rank = (member) => order.indexOf(tierOf(tiers, member))
+        ordered = [...pool.members].sort((a, b) => rank(a) - rank(b) || (available(b) ?? 100) - (available(a) ?? 100))
+        strategy = 'first-available'
+        if (!continuing && stickyMember && tierOf(tiers, stickyMember) !== complexity.tier) sticky = undefined
+      } else {
+        request.complexity = { tier: undefined, score: null, by: 'disabled' }
+        strategy = 'most-remaining'
+      }
+    }
     const chosen = chooseMember({
-      members: pool.members,
-      strategy: pool.strategy,
-      sticky: stickyKey ? this.poolSticky.get(stickyKey) : undefined,
+      members: ordered,
+      strategy,
+      sticky,
       remaining: available,
     })
     const open = (member) => {
       const left = available(member)
       return left === null || left > 5
     }
-    const fitting = pool.members.filter(fits)
+    const fitting = ordered.filter(fits)
     if (!fitting.length) throw Object.assign(new Error('Текущий контекст не влезает ни в одну модель пула'), { status: 400, code: 'context_length_exceeded' })
     let members = fitting.filter((member) => member === chosen || open(member))
     if (!members.length) {
@@ -357,13 +451,71 @@ export class GatewayService {
     }
     if (!members.length) throw Object.assign(new Error('Во всех моделях пула лимит почти исчерпан'), { status: 429 })
     if (chosen) members = [chosen, ...members.filter((member) => member !== chosen)]
-    if (pool.strategy !== 'first-available') {
+    if (strategy === 'most-remaining') {
       const [first, ...rest] = members
       rest.sort((a, b) => (available(b) ?? 100) - (available(a) ?? 100))
       members = [first, ...rest]
     }
     request.poolStickyKey = stickyKey
     return members.map((member) => this.registry.resolve(member))
+  }
+
+  /** Уровень сложности запроса для пула by-complexity или undefined, если режим выключен. */
+  async #complexity(request, pool, settings) {
+    if (request.complexityOverride) return { tier: request.complexityOverride, score: null, by: 'override' }
+    const enabled = enabledClassifiers(settings)
+    const cfg = complexityOf(settings)
+    const classifier = pool.classifier || 'heuristic'
+    if (!enabled.includes(classifier)) return undefined
+    if (classifier === 'heuristic') return { ...classifyHeuristic(request, cfg.heuristic), by: 'heuristic' }
+    const tier = await this.#classifyLlm(request, cfg.llm).catch(() => undefined)
+    if (tier) return { tier, score: null, by: 'llm' }
+    return { ...classifyHeuristic(request, cfg.heuristic), by: 'llm→heuristic' }
+  }
+
+  /** Короткий запрос к дешёвой модели: light | medium | heavy. */
+  async #classifyLlm(request, cfg) {
+    const route = this.registry.resolve(cfg.model)
+    const controller = new AbortController()
+    const outer = request.signal
+    const onAbort = () => controller.abort()
+    outer?.addEventListener?.('abort', onAbort, { once: true })
+    let timer
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        reject(Object.assign(new Error('classifier timeout'), { code: 'timeout' }))
+      }, cfg.timeoutMs)
+    })
+    const summary = `Токенов в контексте: ~${estimateTokens(request)}. Инструментов: ${request.tools?.length ?? 0}. Сообщений: ${request.messages?.length ?? 0}.`
+    const run = (async () => {
+      let text = ''
+      const stream = route.adapter.stream({
+        model: route.model,
+        stream: true,
+        maxTokens: 16,
+        signal: controller.signal,
+        messages: [
+          { role: 'system', content: CLASSIFIER_PROMPT },
+          { role: 'user', content: `${summary}\n\nЗапрос:\n${lastUserText(request).slice(0, 2000)}` },
+        ],
+      })
+      for await (const event of stream) {
+        if (event.type === 'error') throw new Error(event.text || 'classifier error')
+        if (event.type === 'text') text += event.text ?? ''
+        const tier = parseTier(text)
+        if (tier) return tier
+      }
+      return parseTier(text)
+    })()
+    try {
+      return await Promise.race([run, timeout])
+    } finally {
+      clearTimeout(timer)
+      controller.abort()
+      outer?.removeEventListener?.('abort', onAbort)
+      run.catch(() => undefined)
+    }
   }
 
   #cooled(member) {
@@ -440,7 +592,8 @@ export class GatewayService {
       state.requests.unshift({
         id,
         provider: route.adapter.id,
-        model: request.routedModel ? `${request.model} → ${route.publicModel}` : route.publicModel,
+        model: request.routedModel ? `${request.model}${complexityLabel(request.complexity)} → ${route.publicModel}` : route.publicModel,
+        ...(request.complexity?.tier ? { complexity: request.complexity } : {}),
         started,
         durationMs: Date.now() - started,
         status,
@@ -497,6 +650,11 @@ function catalogRow(adapter, model, capability, enabled) {
     ...(model.efforts?.length ? { efforts: model.efforts } : {}),
     ...priceFields(`${adapter.id}/${model.id}`),
   }
+}
+
+function complexityLabel(complexity) {
+  if (!complexity?.tier) return ''
+  return ` [${complexity.tier}${Number.isFinite(complexity.score) ? `·${complexity.score}` : ''}${complexity.by && complexity.by !== 'heuristic' ? ` ${complexity.by}` : ''}]`
 }
 
 function messageText(message) {

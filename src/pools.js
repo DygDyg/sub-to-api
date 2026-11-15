@@ -1,12 +1,16 @@
 const LIMIT = 5
+const STRATEGIES = ['most-remaining', 'first-available', 'by-complexity']
+const CLASSIFIERS = ['heuristic', 'llm', 'auto']
 
 export function normalizePool(input) {
   const id = String(input?.id ?? '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '')
   if (!id || id.length > 40) throw Object.assign(new Error('Имя пула: 1–40 символов, латиница, цифры и дефис'), { status: 400 })
-  const strategy = input?.strategy === 'first-available' ? 'first-available' : 'most-remaining'
+  const strategy = STRATEGIES.includes(input?.strategy) ? input.strategy : 'most-remaining'
   const members = [...new Set((Array.isArray(input?.members) ? input.members : []).map(String))].filter((member) => /^[a-z]+\/\S+$/.test(member))
   if (members.length < 2) throw Object.assign(new Error('В пуле нужны хотя бы две модели вида provider/model'), { status: 400 })
-  return { id, strategy, members }
+  if (strategy !== 'by-complexity') return { id, strategy, members }
+  const classifier = CLASSIFIERS.includes(input?.classifier) ? input.classifier : 'heuristic'
+  return { id, strategy, members, classifier }
 }
 
 /** @param {{supported?: boolean, windows?: {usedPercent?: number}[]}} [snapshot] */

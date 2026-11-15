@@ -98,8 +98,12 @@ Update-TrayIcon
 Set-TrayConsole 0
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
+$update = $menu.Items.Add('Update')
+$update.Visible = $false
 $open = $menu.Items.Add('Open settings')
 $close = $menu.Items.Add('Exit')
+$script:updateNotified = ''
+$script:updateFetch = $null
 $notify.ContextMenuStrip = $menu
 
 $script:popup = $null
@@ -133,9 +137,59 @@ function Stop-UsageFetch {
   $script:fetch = $null
 }
 
+function Stop-UpdateFetch {
+  if (-not $script:updateFetch) { return }
+  try { $script:updateFetch.Timer.Stop() } catch {}
+  try { $script:updateFetch.PowerShell.Stop() } catch {}
+  try { $script:updateFetch.PowerShell.Dispose() } catch {}
+  $script:updateFetch = $null
+}
+
+function Start-UpdateFetch {
+  if ($script:updateFetch) { return }
+  $shell = [powershell]::Create()
+  [void]$shell.AddScript({
+    param($ListenPort)
+    $ProgressPreference = 'SilentlyContinue'
+    $ErrorActionPreference = 'Stop'
+    $payload = Invoke-RestMethod -Uri "http://127.0.0.1:$ListenPort/api/update" -TimeoutSec 10
+    return ConvertTo-Json -InputObject $payload -Depth 3 -Compress
+  }).AddArgument($Port)
+  $handle = $shell.BeginInvoke()
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 200
+  $script:updateFetch = @{ PowerShell = $shell; Handle = $handle; Timer = $timer }
+  $timer.Add_Tick({
+    if (-not $script:updateFetch -or -not $script:updateFetch.Handle.IsCompleted) { return }
+    $shell = $script:updateFetch.PowerShell
+    $handle = $script:updateFetch.Handle
+    $script:updateFetch.Timer.Stop()
+    $script:updateFetch = $null
+    try {
+      $output = @($shell.EndInvoke($handle) | Where-Object { $_ })
+      $info = ConvertFrom-Json ([string]$output[-1])
+      if ($info.available -and $info.latest) {
+        $update.Text = "Обновить до v$($info.latest)"
+        $update.Visible = $true
+        if ($script:updateNotified -ne [string]$info.latest) {
+          $script:updateNotified = [string]$info.latest
+          $notify.ShowBalloonTip(8000, 'SubToAPI', "Доступна версия v$($info.latest). Откройте настройки, чтобы обновить.", [System.Windows.Forms.ToolTipIcon]::Info)
+        }
+      } else {
+        $update.Visible = $false
+      }
+    } catch {
+    } finally {
+      $shell.Dispose()
+    }
+  })
+  $timer.Start()
+}
+
 function Close-App {
   $notify.Visible = $false
   Stop-UsageFetch
+  Stop-UpdateFetch
   if ($script:popup -and -not $script:popup.IsDisposed) { $script:popup.Close() }
   if (Test-OurServer $ServerPid) { Stop-Process -Id $ServerPid -Force -ErrorAction SilentlyContinue }
   [System.Windows.Forms.Application]::Exit()
@@ -429,6 +483,8 @@ function Show-UsagePopup {
 }
 
 $open.Add_Click({ Open-Settings })
+$update.Add_Click({ Open-Settings })
+$notify.Add_BalloonTipClicked({ Open-Settings })
 $close.Add_Click({ Close-App })
 
 $clickTimer = New-Object System.Windows.Forms.Timer
@@ -488,7 +544,18 @@ $timer.Add_Tick({
 })
 $timer.Start()
 
+# The server checks GitHub itself (first check ~30 s after start, then every 6 h).
+# The tray only reads the cached status: once a minute after start, then every 15 minutes.
+$updateTimer = New-Object System.Windows.Forms.Timer
+$updateTimer.Interval = 60000
+$updateTimer.Add_Tick({
+  $updateTimer.Interval = 15 * 60000
+  Start-UpdateFetch
+})
+$updateTimer.Start()
+
 [System.Windows.Forms.Application]::Run()
 Stop-UsageFetch
+Stop-UpdateFetch
 $notify.Dispose()
 $icon.Dispose()

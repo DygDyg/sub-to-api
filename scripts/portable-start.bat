@@ -1,10 +1,12 @@
 @echo off
-chcp 65001 >nul
 setlocal EnableExtensions
 cd /d "%~dp0"
 title SubToAPI
+rem Usage: start.bat [--console] [--no-tray]
+rem   --console  show a console window with the server log
+rem   --no-tray  do not create the tray icon
 if not exist "%~dp0sub-to-api.exe" (
-  echo Не найден sub-to-api.exe
+  echo sub-to-api.exe not found
   pause
   exit /b 1
 )
@@ -19,8 +21,8 @@ if not errorlevel 1 (
   start "" "http://127.0.0.1:%PORT%"
   exit /b 0
 )
-start "SubToAPI" "%~dp0sub-to-api.exe"
-echo Ожидание запуска...
+start "SubToAPI" "%~dp0sub-to-api.exe" %*
+echo Waiting for SubToAPI to start...
 for /l %%I in (1,1,20) do (
   timeout /t 1 /nobreak >nul
   powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:%PORT%/ -TimeoutSec 2 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
@@ -29,6 +31,6 @@ for /l %%I in (1,1,20) do (
     exit /b 0
   )
 )
-echo Сервер не ответил. Смотрите окно SubToAPI.
+echo Server did not respond. Run start.bat --console to see the log.
 pause
 exit /b 1

@@ -70,7 +70,7 @@ function applyTheme(theme) {
 async function load({ refreshUsage = false } = {}) {
   const seq = ++journalSeq
   const overview = await api('/api/overview')
-  const origin = overview.settings.url ?? location.origin
+  const origin = location.origin || overview.settings.url
   const base = `${origin}/v1`
   document.querySelector('#base-url').textContent = base
   setLink('#docs-base', base)
@@ -84,6 +84,7 @@ async function load({ refreshUsage = false } = {}) {
     ? 'Добавьте к адресу страницы параметр settings и ключ. Ссылка уже собрана. Из интернета замените хост на внешний адрес и оставьте ?settings=.'
     : 'Сначала задайте ключ настроек. Затем откройте страницу как адрес/?settings=ключ.'
   document.querySelector('#curl-example').textContent = curlExample(base, overview.settings.apiKeys?.[0]?.key || overview.settings.apiKey)
+  renderTiersPrompt(overview.settings)
   document.querySelector('#port').value = overview.settings.port
   document.querySelector('#exposure').value = overview.settings.exposure || 'localhost'
   document.querySelector('#api-key-scope').value = overview.settings.apiKeyScope || 'localhost'
@@ -102,6 +103,9 @@ async function load({ refreshUsage = false } = {}) {
   }
   document.querySelector('#active').textContent = String(overview.activeRequests)
   document.querySelector('#app-version').textContent = overview.version ? `v${overview.version}` : ''
+  document.querySelector('#update-check').checked = overview.settings.updateCheck !== false
+  applyComplexity(overview.settings.complexity)
+  loadUpdate().catch(() => undefined)
   const open = new Set(JSON.parse(localStorage.getItem('provider-open') || '[]'))
   const connected = overview.providers.filter((provider) => provider.accounts.length)
   const available = overview.providers.filter((provider) => !provider.accounts.length)
@@ -296,7 +300,12 @@ function openConnect(available) {
 let catalogRows = []
 async function loadCatalog(refresh = false) {
   const target = document.querySelector('#catalog')
-  catalogRows = (await api(`/api/catalog${refresh ? '?refresh=1' : ''}`).catch((error) => ({ data: [], error: error.message }))).data ?? []
+  const [catalog, tiers] = await Promise.all([
+    api(`/api/catalog${refresh ? '?refresh=1' : ''}`).catch((error) => ({ data: [], error: error.message })),
+    api('/api/model-tiers').catch(() => ({ assigned: {} })),
+  ])
+  modelTiers = tiers.assigned ?? {}
+  catalogRows = catalog.data ?? []
   if (!catalogRows.length) {
     target.innerHTML = '<p class="text-body-secondary">Модели появятся после входа в провайдера</p>'
     return
@@ -356,7 +365,29 @@ function catalogItem(model) {
     : model.price?.unit ? `<strong>${escape(model.price.unit)}</strong>` : ''
   card.innerHTML = `<div class="min-w-0"><strong>${escape(model.name)}</strong><div class="catalog-id"><code>${escape(model.id)}</code><button type="button" class="btn btn-outline-secondary btn-icon" title="Копировать идентификатор" aria-label="Копировать идентификатор"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button></div>${model.description ? `<p class="text-body-secondary small mb-0">${escape(model.description)}</p>` : ''}<div class="tags">${tags.map(([kind, mark, text]) => `<span class="badge rounded-pill ${kind === 'hidden' ? 'text-bg-danger' : 'bg-body-tertiary text-body-secondary border'}">${mark}${escape(text)}</span>`).join('')}</div></div>${price ? `<div class="price-col" title="${escape(model.price.title)}">${price}</div>` : ''}`
   card.querySelector('button').onclick = () => navigator.clipboard.writeText(model.id)
+  if (model.capability === 'chat') card.querySelector('.tags').insertAdjacentHTML('afterend', tierSelect(model.id))
+  const select = card.querySelector('[data-tier]')
+  if (select) select.onchange = () => saveModelTier(model.id, select)
   return card
+}
+
+function tierSelect(id) {
+  const current = modelTiers[id] || ''
+  const options = [['', 'уровень не задан'], ['light', 'light — быстрые'], ['medium', 'medium — обычные'], ['heavy', 'heavy — сильные']]
+    .map(([value, label]) => `<option value="${value}"${value === current ? ' selected' : ''}>${label}</option>`).join('')
+  return `<label class="d-inline-flex align-items-center gap-2 mt-2 small">Уровень<select class="form-select form-select-sm" data-tier style="width:auto">${options}</select><span data-tier-status class="text-body-secondary"></span></label>`
+}
+
+async function saveModelTier(id, select) {
+  const status = select.parentElement.querySelector('[data-tier-status]')
+  status.textContent = '…'
+  try {
+    const saved = await api('/api/model-tiers', { method: 'POST', body: JSON.stringify({ tiers: { [id]: select.value || null } }) })
+    modelTiers = saved.tiers ?? {}
+    status.textContent = 'сохранено'
+  } catch (error) {
+    status.textContent = error.message
+  }
 }
 
 async function fillModels(card, provider, refresh = false) {
@@ -754,16 +785,85 @@ document.querySelector('#apply-port').onclick = async () => {
   status.textContent = 'Проверяю порт…'
   try {
     const saved = await api('/api/settings', { method: 'POST', body: JSON.stringify({ port }) })
-    const unchanged = saved.url === `${location.origin}/`
+    const target = pageUrlForPort(saved.port)
+    const unchanged = target === pageUrlForPort(currentPagePort())
     status.textContent = unchanged ? 'Этот порт уже используется приложением. Изменения не нужны.' : 'Порт свободен. Переключаю…'
-    if (!unchanged) setTimeout(() => { location.href = saved.url }, 400)
+    if (!unchanged) setTimeout(() => { location.href = target }, 400)
   } catch (error) {
     status.textContent = error.message
   } finally {
     button.disabled = false
   }
 }
-const strategyName = { 'most-remaining': 'Где больше остаток', 'first-available': 'Первая с лимитом' }
+const strategyName = { 'most-remaining': 'Где больше остаток', 'first-available': 'Первая с лимитом', 'by-complexity': 'По сложности запроса' }
+const classifierName = { heuristic: 'Эвристики', llm: 'LLM-классификатор', auto: 'LLM, при сбое эвристики' }
+const tierName = { light: 'light', medium: 'medium', heavy: 'heavy' }
+let complexitySettings = null
+let modelTiers = {}
+
+function applyComplexity(complexity) {
+  complexitySettings = complexity || { heuristic: { enabled: false, mediumAt: 1, heavyAt: 3 }, llm: { enabled: false, model: '', timeoutMs: 1500 } }
+  const heuristic = complexitySettings.heuristic || {}
+  const llm = complexitySettings.llm || {}
+  document.querySelector('#cx-heuristic').checked = Boolean(heuristic.enabled)
+  document.querySelector('#cx-medium-at').value = heuristic.mediumAt ?? 1
+  document.querySelector('#cx-heavy-at').value = heuristic.heavyAt ?? 3
+  document.querySelector('#cx-llm').checked = Boolean(llm.enabled)
+  document.querySelector('#cx-llm-timeout').value = llm.timeoutMs ?? 1500
+  fillClassifierModels()
+}
+
+function complexityEnabled() {
+  const cfg = complexitySettings
+  return Boolean(cfg?.heuristic?.enabled || (cfg?.llm?.enabled && cfg?.llm?.model))
+}
+
+function enabledClassifierOptions() {
+  const options = []
+  if (complexitySettings?.heuristic?.enabled) options.push('heuristic')
+  if (complexitySettings?.llm?.enabled && complexitySettings?.llm?.model) options.push('llm')
+  if (options.length === 2) options.push('auto')
+  return options
+}
+
+async function fillClassifierModels() {
+  const select = document.querySelector('#cx-llm-model')
+  if (!select) return
+  const payload = await api('/api/model-tiers').catch(() => ({ models: [] }))
+  if (payload.assigned) modelTiers = payload.assigned
+  const current = complexitySettings?.llm?.model || ''
+  const rows = (payload.models ?? []).filter((model) => model.enabled !== false)
+  select.replaceChildren(...(rows.length ? rows.map((model) => new Option(`${model.provider}: ${model.name || model.id}`, model.id, false, model.id === current)) : [new Option('Сначала войдите в провайдера', '')]))
+  if (current && !rows.some((model) => model.id === current)) select.add(new Option(current, current, false, true), 0)
+  select.value = current
+}
+document.querySelector('#cx-save').onclick = async () => {
+  const status = document.querySelector('#cx-status')
+  status.textContent = 'Сохраняю…'
+  try {
+    const saved = await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({
+        complexity: {
+          heuristic: {
+            enabled: document.querySelector('#cx-heuristic').checked,
+            mediumAt: Number(document.querySelector('#cx-medium-at').value),
+            heavyAt: Number(document.querySelector('#cx-heavy-at').value),
+          },
+          llm: {
+            enabled: document.querySelector('#cx-llm').checked,
+            model: document.querySelector('#cx-llm-model').value,
+            timeoutMs: Number(document.querySelector('#cx-llm-timeout').value),
+          },
+        },
+      }),
+    })
+    applyComplexity(saved.complexity)
+    status.textContent = 'Сохранено'
+  } catch (error) {
+    status.textContent = error.message
+  }
+}
 const poolIcons = {
   grip: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="7" r="1.4"/><circle cx="15" cy="7" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="17" r="1.4"/><circle cx="15" cy="17" r="1.4"/></svg>',
   up: '<svg viewBox="0 0 24 24"><path d="m6 14 6-6 6 6"/></svg>',
@@ -818,6 +918,10 @@ function renderPoolMembers() {
   }))
 }
 function renderPoolPicked() {
+  renderPoolPickedRows()
+  if (document.querySelector('#pool-strategy').value === 'by-complexity') syncPoolStrategy()
+}
+function renderPoolPickedRows() {
   const box = document.querySelector('#pool-picked')
   if (!poolMembers.length) {
     const empty = document.createElement('p')
@@ -830,7 +934,8 @@ function renderPoolPicked() {
     const row = document.createElement('div')
     row.className = 'list-group-item d-flex align-items-center gap-2 pool-member'
     const name = poolModelName(id)
-    row.innerHTML = `<span class="pool-grip" title="Перетащите, чтобы изменить порядок">${poolIcons.grip}</span><span class="text-body-secondary small" style="width:1.25rem">${index + 1}</span><span class="min-w-0 flex-grow-1"><code>${escape(id)}</code>${name ? `<small class="d-block text-body-secondary">${escape(name)}</small>` : ''}</span><span class="pool-actions"><button type="button" class="btn btn-outline-secondary btn-icon" data-up title="Выше" aria-label="Выше"${index === 0 ? ' disabled' : ''}>${poolIcons.up}</button><button type="button" class="btn btn-outline-secondary btn-icon" data-down title="Ниже" aria-label="Ниже"${index === poolMembers.length - 1 ? ' disabled' : ''}>${poolIcons.down}</button><button type="button" class="btn btn-outline-secondary btn-icon" data-remove title="Убрать" aria-label="Убрать">${poolIcons.remove}</button></span>`
+    const tier = tierBadge(id)
+    row.innerHTML = `<span class="pool-grip" title="Перетащите, чтобы изменить порядок">${poolIcons.grip}</span><span class="text-body-secondary small" style="width:1.25rem">${index + 1}</span><span class="min-w-0 flex-grow-1"><code>${escape(id)}</code>${name ? `<small class="d-block text-body-secondary">${escape(name)}</small>` : ''}</span>${tier}<span class="pool-actions"><button type="button" class="btn btn-outline-secondary btn-icon" data-up title="Выше" aria-label="Выше"${index === 0 ? ' disabled' : ''}>${poolIcons.up}</button><button type="button" class="btn btn-outline-secondary btn-icon" data-down title="Ниже" aria-label="Ниже"${index === poolMembers.length - 1 ? ' disabled' : ''}>${poolIcons.down}</button><button type="button" class="btn btn-outline-secondary btn-icon" data-remove title="Убрать" aria-label="Убрать">${poolIcons.remove}</button></span>`
     const grip = row.querySelector('.pool-grip')
     grip.draggable = true
     grip.ondragstart = (event) => {
@@ -865,30 +970,74 @@ function renderPoolPicked() {
     return row
   }))
 }
+function tierBadge(id) {
+  if (!complexityEnabled()) return ''
+  const tier = modelTiers[id]
+  const label = tierName[tier] || 'без уровня'
+  const kind = tier || 'unset'
+  return `<span class="badge rounded-pill border tier-${kind}">${label}</span>`
+}
+function syncPoolStrategy() {
+  const select = document.querySelector('#pool-strategy')
+  const option = select.querySelector('option[value="by-complexity"]')
+  const enabled = complexityEnabled()
+  option.hidden = !enabled
+  option.disabled = !enabled
+  const box = document.querySelector('#pool-complexity')
+  const note = document.querySelector('#pool-complexity-note')
+  if (select.value !== 'by-complexity') {
+    box.hidden = true
+    return
+  }
+  box.hidden = false
+  const classifier = document.querySelector('#pool-classifier')
+  const options = enabledClassifierOptions()
+  classifier.replaceChildren(...options.map((value) => new Option(classifierName[value], value)))
+  const wanted = classifier.dataset.value
+  classifier.value = options.includes(wanted) ? wanted : options[0] || ''
+  if (!poolMembers.length) {
+    note.textContent = ''
+    return
+  }
+  const missing = ['light', 'medium', 'heavy'].filter((tier) => !poolMembers.some((id) => (modelTiers[id] || 'medium') === tier))
+  note.className = `small mb-0 ${missing.length ? 'text-warning' : 'text-body-secondary'}`
+  note.textContent = missing.length
+    ? `Нет моделей уровня ${missing.join(', ')}: такие запросы уйдут на соседний уровень. Уровень задаётся во вкладке «Модели».`
+    : 'Каждый уровень представлен хотя бы одной моделью.'
+}
 function openPoolDialog(pool) {
   const form = document.querySelector('#pool-form')
   poolEditingId = pool?.id ?? null
   poolMembers = pool ? [...pool.members] : []
   form.reset()
   form.elements.id.value = pool?.id ?? ''
-  form.elements.strategy.value = pool?.strategy === 'first-available' ? 'first-available' : 'most-remaining'
+  const strategy = pool?.strategy === 'first-available' || pool?.strategy === 'by-complexity' ? pool.strategy : 'most-remaining'
+  form.elements.strategy.value = strategy
+  document.querySelector('#pool-classifier').dataset.value = pool?.classifier || ''
   document.querySelector('#pool-dialog-title').textContent = pool ? 'Редактировать пул' : 'Новый пул'
   document.querySelector('#pool-status').textContent = ''
   document.querySelector('#pool-search').value = ''
   setPoolPicker(false)
   renderPoolPicked()
   renderPoolMembers()
+  syncPoolStrategy()
   document.querySelector('#pool-dialog').showModal()
   if (!pool) form.elements.id.focus()
 }
 async function loadPools() {
-  const [catalog, pools] = await Promise.all([api('/api/catalog'), api('/api/pools')])
-  poolCatalog = catalog.data.filter((model) => model.capability === 'chat' && model.enabled)
+  const [catalog, pools, tiers] = await Promise.all([api('/api/catalog').catch(() => null), api('/api/pools'), api('/api/model-tiers').catch(() => ({ assigned: {}, models: [] }))])
+  // каталог падает целиком, если один провайдер ответил ошибкой; тогда берём список из model-tiers
+  poolCatalog = catalog
+    ? catalog.data.filter((model) => model.capability === 'chat' && model.enabled)
+    : (tiers.models ?? []).filter((model) => model.enabled !== false).map((model) => ({ ...model, capability: 'chat' }))
+  modelTiers = tiers.assigned ?? modelTiers
   const list = document.querySelector('#pool-list')
   list.replaceChildren(...(pools.data.length ? pools.data.map((pool) => {
     const card = document.createElement('article')
     card.className = 'card shadow-sm pool-card'
-    card.innerHTML = `<div class="card-body d-flex justify-content-between align-items-start gap-3"><div class="min-w-0"><code>pool/${escape(pool.id)}</code><small class="d-block text-body-secondary">${escape(strategyName[pool.strategy] || pool.strategy)} · ${pluralModels(pool.members.length)}</small><ol class="small text-body-secondary mb-0 mt-2 ps-3">${pool.members.map((id) => `<li><code>${escape(id)}</code></li>`).join('')}</ol></div><div class="d-flex gap-2 flex-none"><button type="button" class="btn btn-outline-secondary btn-icon" data-edit title="Редактировать" aria-label="Редактировать">${poolIcons.pencil}</button><button type="button" class="btn btn-outline-secondary btn-sm" data-delete>Удалить</button></div></div>`
+    const warn = pool.strategy === 'by-complexity' && !complexityEnabled() ? '<small class="d-block text-warning">Режим выбора по сложности выключен в настройках — пул работает по остатку лимита.</small>' : ''
+    const via = pool.strategy === 'by-complexity' && pool.classifier ? ` · ${classifierName[pool.classifier] || pool.classifier}` : ''
+    card.innerHTML = `<div class="card-body d-flex justify-content-between align-items-start gap-3"><div class="min-w-0"><code>pool/${escape(pool.id)}</code><small class="d-block text-body-secondary">${escape(strategyName[pool.strategy] || pool.strategy)}${escape(via)} · ${pluralModels(pool.members.length)}</small>${warn}<ol class="small text-body-secondary mb-0 mt-2 ps-3">${pool.members.map((id) => `<li><code>${escape(id)}</code></li>`).join('')}</ol></div><div class="d-flex gap-2 flex-none"><button type="button" class="btn btn-outline-secondary btn-icon" data-edit title="Редактировать" aria-label="Редактировать">${poolIcons.pencil}</button><button type="button" class="btn btn-outline-secondary btn-sm" data-delete>Удалить</button></div></div>`
     card.querySelector('[data-edit]').onclick = () => openPoolDialog(pool)
     card.querySelector('[data-delete]').onclick = async () => {
       await api(`/api/pools/${encodeURIComponent(pool.id)}`, { method: 'DELETE' })
@@ -900,6 +1049,7 @@ async function loadPools() {
 document.querySelector('#open-pool').onclick = () => openPoolDialog()
 document.querySelector('[data-pool-close]').onclick = () => document.querySelector('#pool-dialog').close()
 document.querySelector('#pool-add-toggle').onclick = () => setPoolPicker(document.querySelector('#pool-picker').hidden)
+document.querySelector('#pool-strategy').onchange = () => syncPoolStrategy()
 document.querySelector('#pool-search').oninput = () => renderPoolMembers()
 document.querySelector('#pool-search').onkeydown = (event) => {
   if (event.key === 'Enter') event.preventDefault()
@@ -925,6 +1075,7 @@ document.querySelector('#pool-form').onsubmit = async (event) => {
       body: JSON.stringify({
         id: form.get('id'),
         strategy: form.get('strategy'),
+        ...(form.get('strategy') === 'by-complexity' ? { classifier: form.get('classifier') } : {}),
         members: poolMembers,
       }),
     })
@@ -944,6 +1095,108 @@ document.querySelector('#save-full').onchange = async (event) => {
   } catch (error) {
     event.currentTarget.checked = !enabled
     document.querySelector('#port-status').textContent = error.message
+  }
+}
+let updateInstalling = false
+
+function formatCheckedAt(value) {
+  if (!value) return ''
+  return new Date(value).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+}
+
+function renderUpdate(update) {
+  const banner = document.querySelector('#update-banner')
+  const info = document.querySelector('#update-info')
+  const checkNow = document.querySelector('#update-check-now')
+  const toggle = document.querySelector('#update-check')
+  if (!update.supported) {
+    banner.hidden = true
+    info.textContent = 'Автообновление работает в портативной сборке. При запуске из исходников обновляйте папку через git.'
+    checkNow.disabled = true
+    toggle.disabled = true
+    return
+  }
+  checkNow.disabled = update.state === 'checking' || updateInstalling
+  toggle.disabled = false
+  const checked = update.checkedAt ? ` Проверено: ${formatCheckedAt(update.checkedAt)}.` : ''
+  if (update.error && update.state === 'error') info.textContent = `Ошибка: ${update.error}.${checked}`
+  else if (update.available) info.textContent = `Доступна версия v${update.latest}, установлена v${update.current}.${checked}`
+  else if (update.latest) info.textContent = `Установлена последняя версия v${update.current}.${checked}`
+  else info.textContent = `Установлена v${update.current}.${checked}`
+  if (!updateInstalling) {
+    banner.hidden = !update.available
+    document.querySelector('#update-version').textContent = update.latest ? `v${update.latest}` : ''
+    const notes = document.querySelector('#update-notes')
+    notes.href = update.url || '#'
+    notes.title = update.notes || ''
+  }
+}
+
+async function loadUpdate() {
+  renderUpdate(await api('/api/update'))
+}
+
+async function waitForRestart(expected) {
+  const status = document.querySelector('#update-status')
+  const deadline = Date.now() + 120_000
+  await new Promise((resolve) => setTimeout(resolve, 2000))
+  while (Date.now() < deadline) {
+    try {
+      const update = await fetch('/api/update', { headers: sessionStorage.getItem('settingsKey') ? { 'x-settings-key': sessionStorage.getItem('settingsKey') } : {} }).then((response) => response.json())
+      if (update.current === expected) {
+        status.textContent = 'Готово, перезагружаю…'
+        location.reload()
+        return
+      }
+      if (update.current) {
+        status.textContent = 'Обновление не применилось, см. settings/update.log'
+        updateInstalling = false
+        document.querySelector('#update-install').disabled = false
+        return
+      }
+    } catch { /* сервер ещё перезапускается */ }
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+  }
+  status.textContent = 'Сервер не вернулся. Запустите start.bat и проверьте settings/update.log.'
+}
+
+document.querySelector('#update-install').onclick = async (event) => {
+  const button = event.currentTarget
+  const status = document.querySelector('#update-status')
+  const version = document.querySelector('#update-version').textContent
+  if (!confirm(`Установить ${version}? Программа перезапустится, текущие запросы прервутся.`)) return
+  button.disabled = true
+  updateInstalling = true
+  status.textContent = 'Скачиваю…'
+  try {
+    const result = await api('/api/update/install', { method: 'POST', body: '{}' })
+    status.textContent = 'Перезапуск…'
+    await waitForRestart(result.version)
+  } catch (error) {
+    updateInstalling = false
+    button.disabled = false
+    status.textContent = error.message
+  }
+}
+document.querySelector('#update-check-now').onclick = async (event) => {
+  const button = event.currentTarget
+  button.disabled = true
+  document.querySelector('#update-info').textContent = 'Проверяю…'
+  try {
+    renderUpdate(await api('/api/update/check', { method: 'POST', body: '{}' }))
+  } catch (error) {
+    document.querySelector('#update-info').textContent = error.message
+  } finally {
+    button.disabled = false
+  }
+}
+document.querySelector('#update-check').onchange = async (event) => {
+  const enabled = event.currentTarget.checked
+  try {
+    await api('/api/settings', { method: 'POST', body: JSON.stringify({ updateCheck: enabled }) })
+  } catch (error) {
+    event.currentTarget.checked = !enabled
+    document.querySelector('#update-info').textContent = error.message
   }
 }
 document.querySelector('#open-full').onclick = async () => {
@@ -970,7 +1223,8 @@ document.querySelector('#settings-form').onsubmit = async (event) => {
       }),
     })
     status.textContent = 'Сохранено'
-    if (saved.url && saved.url !== `${location.origin}/`) setTimeout(() => { location.href = saved.url }, 400)
+    const target = saved.port ? pageUrlForPort(saved.port) : ''
+    if (target && target !== pageUrlForPort(currentPagePort())) setTimeout(() => { location.href = target }, 400)
     else await load()
   } catch (error) {
     status.textContent = error.message
@@ -1179,6 +1433,19 @@ function rememberSettingsQuery() {
   history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`)
 }
 
+function currentPagePort() {
+  if (location.port) return Number(location.port)
+  return location.protocol === 'https:' ? 443 : 80
+}
+
+/** Та же страница (хост/IP, протокол, вкладка), но на другом порту. */
+function pageUrlForPort(port) {
+  const url = new URL('/', location.href)
+  url.port = String(port)
+  url.hash = location.hash
+  return url.toString()
+}
+
 function settingsPageLink(origin, key) {
   const url = new URL('/', origin)
   if (key) url.searchParams.set('settings', key)
@@ -1190,6 +1457,35 @@ function setLink(selector, href) {
   link.href = href
   link.textContent = href
 }
+
+const PROMPT_STEPS = `Порядок работы:
+1. GET {BASE}/v1/model-tiers с заголовком Authorization: Bearer {API_KEY}. В ответе поле instructions — правила расстановки, models[] — модели с полями id, name, provider, tier, tierSet, contextWindow, efforts, supportsTools, supportsImages, price.
+2. Реши уровень каждой чат-модели по правилам из instructions.
+3. Сохрани всё одним запросом: POST {BASE}/api/model-tiers, заголовки Content-Type: application/json и x-settings-key: {SETTINGS_KEY}, тело {"tiers": {"provider/model": "light|medium|heavy", ...}}. Значение null сбрасывает уровень.
+4. Покажи таблицу: модель, уровень, короткое обоснование. Сверься с ответом POST — там итоговая карта уровней.`
+
+async function renderTiersPrompt(settings) {
+  const box = document.querySelector('#tiers-prompt')
+  if (!box) return
+  const guide = (await api('/api/model-tiers').catch(() => ({}))).instructions
+  const base = (location.origin || settings.url || '').replace(/\/$/, '')
+  const real = document.querySelector('#prompt-real-keys')?.checked
+  const apiKey = real ? (settings.apiKeys?.[0]?.key || settings.apiKey || '<API_KEY>') : '<API_KEY>'
+  const settingsKey = real ? (settings.settingsKey || '<SETTINGS_KEY>') : '<SETTINGS_KEY>'
+  const body = guide
+    ? guide.replaceAll('{BASE}', base).replaceAll('{API_KEY}', apiKey).replaceAll('{SETTINGS_KEY}', settingsKey)
+    : ''
+  box.textContent = [body, '', PROMPT_STEPS.replaceAll('{BASE}', base).replaceAll('{API_KEY}', apiKey).replaceAll('{SETTINGS_KEY}', settingsKey)].filter(Boolean).join('\n')
+}
+document.querySelector('#prompt-real-keys')?.addEventListener('change', (event) => {
+  if (event.currentTarget.checked && !document.querySelector('#settings-key').value) {
+    event.currentTarget.checked = false
+    event.currentTarget.parentElement.title = 'Сначала задайте ключ настроек во вкладке «Настройки»'
+    return
+  }
+  load().catch(() => undefined)
+})
+document.querySelector('#copy-tiers-prompt')?.addEventListener('click', (event) => copyText(document.querySelector('#tiers-prompt').textContent, event.currentTarget))
 
 function curlExample(base, key) {
   const auth = key ? ` \\\n  -H "Authorization: Bearer ${key}"` : ''

@@ -40,4 +40,5 @@ jobs:
         run: |
           $zip = Get-ChildItem release\SubToAPI-*-win-x64.zip | Select-Object -First 1
           if (-not $zip) { throw "Release archive was not created" }
-          gh release create $env:RELEASE_TAG $zip.FullName --title $env:RELEASE_TAG --notes-file release\RELEASE_NOTES.txt
+          if (-not (Test-Path release\SHA256SUMS.txt)) { throw "SHA256SUMS.txt was not created" }
+          gh release create $env:RELEASE_TAG $zip.FullName release\SHA256SUMS.txt --title $env:RELEASE_TAG --notes-file release\RELEASE_NOTES.txt

@@ -141,6 +141,109 @@ test('pool switches to the next model when the first is at capacity', async () =
   assert.equal(second.find((event) => event.type === 'text')?.text, 'pong')
 })
 
+function complexityService(settings, models) {
+  const seen = []
+  const grok = new BaseProvider('grok', 'Grok')
+  const codex = new BaseProvider('codex', 'Codex')
+  grok.stream = async function* (request) { seen.push(request.model); yield { type: 'text', text: request.model } }
+  codex.stream = async function* (request) { seen.push(request.model); yield { type: 'text', text: request.model } }
+  const state = {
+    pools: [{ id: 'smart', strategy: 'by-complexity', classifier: 'heuristic', members: ['grok/mini', 'codex/sonnet', 'codex/opus'] }],
+    settings: { complexity: { heuristic: { enabled: true, mediumAt: 1, heavyAt: 3 }, llm: { enabled: false, model: '', timeoutMs: 1500 } }, modelTiers: { 'grok/mini': 'light', 'codex/sonnet': 'medium', 'codex/opus': 'heavy' }, ...settings },
+  }
+  const service = new GatewayService({ read: async () => state, update: async () => {} }, new ProviderRegistry([grok, codex]))
+  return { service, seen, models }
+}
+
+test('complexity pool routes to the tier and climbs to a neighbour', async () => {
+  const { service, seen } = complexityService()
+  const events = async (messages) => {
+    const out = []
+    for await (const event of service.stream({ model: 'pool/smart', messages, promptCacheKey: 'chat' })) out.push(event)
+    return out
+  }
+  const light = await events([{ role: 'user', content: 'Привет' }])
+  assert.equal(light.find((event) => event.type === 'text')?.text, 'mini')
+  const heavy = await events([{ role: 'user', content: 'Спроектируй архитектуру очереди с учётом гонки и deadlock, докажи корректность' }])
+  assert.equal(heavy.find((event) => event.type === 'text')?.text, 'opus')
+  assert.deepEqual(seen, ['mini', 'opus'])
+  const state = await service.store.read()
+  state.settings.modelTiers = { 'grok/mini': 'light', 'codex/sonnet': 'medium' }
+  const climbed = await events([{ role: 'user', content: 'Спроектируй архитектуру очереди с учётом гонки и deadlock, докажи корректность' }])
+  assert.equal(climbed.find((event) => event.type === 'text')?.text, 'sonnet')
+})
+
+test('tool cycle stays on the sticky model even when the next request looks trivial', async () => {
+  const { service } = complexityService()
+  const run = async (messages, promptCacheKey = 'agent') => {
+    const out = []
+    for await (const event of service.stream({ model: 'pool/smart', messages, promptCacheKey })) out.push(event)
+    return out.find((event) => event.type === 'text')?.text
+  }
+  assert.equal(await run([{ role: 'user', content: 'Спроектируй архитектуру очереди с учётом гонки и deadlock, докажи корректность' }]), 'opus')
+  assert.equal(await run([{ role: 'user', content: 'Спроектируй' }, { role: 'tool', content: 'ok' }]), 'opus')
+  // в том же диалоге уровень не понижается, в новом — да
+  assert.equal(await run([{ role: 'user', content: 'Привет' }]), 'opus')
+  assert.equal(await run([{ role: 'user', content: 'Привет' }], 'other'), 'mini')
+})
+
+test('llm classifier timeout falls back to heuristics', async () => {
+  const grok = new BaseProvider('grok', 'Grok')
+  const codex = new BaseProvider('codex', 'Codex')
+  grok.stream = (request) => request.model === 'judge'
+    ? new Promise(() => {})
+    : (async function* () { yield { type: 'text', text: 'mini' } })()
+  codex.stream = async function* () { yield { type: 'text', text: 'opus' } }
+  const service = new GatewayService({
+    read: async () => ({
+      pools: [{ id: 'smart', strategy: 'by-complexity', classifier: 'llm', members: ['grok/mini', 'codex/opus'] }],
+      settings: { complexity: { heuristic: { enabled: true, mediumAt: 1, heavyAt: 3 }, llm: { enabled: true, model: 'grok/judge', timeoutMs: 300 } }, modelTiers: { 'grok/mini': 'light', 'codex/opus': 'heavy' } },
+    }),
+    update: async () => {},
+  }, new ProviderRegistry([grok, codex]))
+  const out = []
+  for await (const event of service.stream({ model: 'pool/smart', messages: [{ role: 'user', content: 'Привет' }] })) out.push(event)
+  assert.equal(out.find((event) => event.type === 'text')?.text, 'mini')
+})
+
+test('x-complexity overrides the classifier', async () => {
+  const { service } = complexityService()
+  const out = []
+  for await (const event of service.stream({ model: 'pool/smart', messages: [{ role: 'user', content: 'Привет' }], complexityOverride: 'heavy' })) out.push(event)
+  assert.equal(out.find((event) => event.type === 'text')?.text, 'opus')
+})
+
+test('model tiers are readable with the api key and writable with the settings key', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'sub-to-api-'))
+  const store = new Store(join(directory, 'state.json'))
+  await store.ensureApiKey()
+  await store.update((state) => { state.settings.settingsKey = 'secret-settings' })
+  const grok = new BaseProvider('grok', 'Grok')
+  grok.listModels = async () => [{ id: 'mini', name: 'Mini', contextWindow: 8000 }]
+  const service = new GatewayService(store, new ProviderRegistry([grok]))
+  const server = createAppServer(service, store, { host: '127.0.0.1', port: 8787, configuredPort: 8787, settingsKey: 'secret-settings', settingsKeyScope: 'localhost' })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${server.address().port}`
+  const key = (await store.read()).settings.apiKey
+  try {
+    assert.equal((await fetch(`${base}/v1/model-tiers`)).status, 401)
+    const read = await fetch(`${base}/v1/model-tiers`, { headers: { authorization: `Bearer ${key}` } })
+    const body = await read.json()
+    assert.equal(body.models[0].id, 'grok/mini')
+    assert.equal(body.models[0].tierSet, false)
+    assert.match(body.instructions, /POST \{BASE\}\/api\/model-tiers/)
+    const bad = await fetch(`${base}/api/model-tiers`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-settings-key': 'secret-settings' }, body: JSON.stringify({ tiers: { 'grok/mini': 'ultra' } }) })
+    assert.equal(bad.status, 400)
+    const saved = await fetch(`${base}/api/model-tiers`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-settings-key': 'secret-settings' }, body: JSON.stringify({ tiers: { 'grok/mini': 'light' } }) })
+    assert.equal((await saved.json()).tiers['grok/mini'], 'light')
+    const again = await (await fetch(`${base}/v1/model-tiers`, { headers: { authorization: `Bearer ${key}` } })).json()
+    assert.equal(again.models[0].tier, 'light')
+    assert.equal(again.models[0].tierSet, true)
+  } finally {
+    server.close()
+  }
+})
+
 test('usage keeps cache reads and writes apart from fresh input', async () => {
   const completion = await collectChatCompletion('claude/test', [{ type: 'text', text: 'ok' }, { type: 'usage', inputTokens: 10, outputTokens: 4, cacheReadTokens: 7, cacheWriteTokens: 2 }, { type: 'done', finishReason: 'stop' }])
   assert.equal(completion.usage.prompt_tokens, 10)
