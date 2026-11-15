@@ -1400,8 +1400,7 @@ function customPayload() {
 
 document.querySelector('#custom-add').onclick = () => openCustomForm()
 document.querySelector('#custom-cancel').onclick = () => { document.querySelector('#custom-form').hidden = true }
-document.querySelector('#custom-form').onsubmit = async (event) => {
-  event.preventDefault()
+document.querySelector('#custom-save').onclick = async () => {
   const status = document.querySelector('#custom-status')
   status.textContent = 'Сохраняю…'
   try {

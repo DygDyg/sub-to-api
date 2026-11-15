@@ -348,11 +348,11 @@
                     <button type="button" id="custom-add" class="btn btn-outline-secondary btn-sm">Добавить</button>
                   </div>
                   <div id="custom-providers" class="vstack gap-2"></div>
-                  <form id="custom-form" hidden class="border rounded p-3 vstack gap-3">
+                  <div id="custom-form" hidden class="border rounded p-3 vstack gap-3">
                     <div class="row g-3">
                       <div class="col-md-4">
                         <label class="form-label" for="custom-label">Название</label>
-                        <input id="custom-label" class="form-control" placeholder="OpenRouter" required>
+                        <input id="custom-label" class="form-control" placeholder="OpenRouter">
                       </div>
                       <div class="col-md-4">
                         <label class="form-label" for="custom-id">id</label>
@@ -368,7 +368,7 @@
                     </div>
                     <div>
                       <label class="form-label" for="custom-base">Base URL</label>
-                      <input id="custom-base" class="form-control" placeholder="https://openrouter.ai/api/v1" required spellcheck="false" autocomplete="off">
+                      <input id="custom-base" class="form-control" placeholder="https://openrouter.ai/api/v1" spellcheck="false" autocomplete="off">
                     </div>
                     <div>
                       <label class="form-label" for="custom-key">API key</label>
@@ -387,10 +387,10 @@
                     <div class="d-flex gap-2 justify-content-end">
                       <button type="button" id="custom-cancel" class="btn btn-outline-secondary">Отмена</button>
                       <button type="button" id="custom-test" class="btn btn-outline-secondary">Проверить</button>
-                      <button type="submit" class="btn btn-primary">Сохранить</button>
+                      <button type="button" id="custom-save" class="btn btn-primary">Сохранить</button>
                     </div>
                     <p id="custom-status" class="small mb-0"></p>
-                  </form>
+                  </div>
                 </div>
               </article>
             </div>
