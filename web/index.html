@@ -28,7 +28,7 @@
     .side-limit[data-id="copilot"] { --dot: #1f6feb; }
     .side-limit[data-id="antigravity"] { --dot: #4285f4; }
     .side-limit-name { display: flex; align-items: center; gap: .4rem; min-width: 0; font-size: .8rem; font-weight: 600; }
-    .side-limit-name::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; background: var(--dot); flex: none; }
+    .side-limit-name::before { display: none; }
     .side-limit-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .side-meter { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: baseline; gap: .1rem .35rem; margin-top: .4rem; font-size: .72rem; }
     .side-meter span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--bs-secondary-color); }
@@ -39,6 +39,8 @@
     nav.tabs svg, .btn-icon svg, .tags svg { stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
     nav.tabs svg, .btn-icon svg { width: 1rem; height: 1rem; }
     .tags svg { width: .75rem; height: .75rem; }
+    .tags .provider-mark { width: .9rem; height: .9rem; font-size: .48rem; border-radius: .22rem; }
+    .stats-legend .provider-mark { width: 1rem; height: 1rem; }
     .tab { display: none; }
     .tab.active { display: block; }
     .btn-icon { width: 2.1rem; height: 2.1rem; padding: 0; display: inline-flex; align-items: center; justify-content: center; flex: none; }
@@ -67,6 +69,8 @@
     .provider-mark.custom { --provider-mark: #6f42c1; position: relative; overflow: hidden; }
     .provider-mark b { font: inherit; }
     .provider-mark img { position: absolute; inset: 0; width: 100%; height: 100%; padding: .08rem; object-fit: contain; background: var(--bs-body-bg); }
+    .provider-mark.has-logo { background: transparent; }
+    .provider-mark.has-logo img { padding: 0; background: transparent; }
     .provider > summary h3 { display: inline-flex; align-items: center; gap: .45rem; }
     .model-with-provider { display: inline-flex; align-items: center; gap: .4rem; min-width: 0; }
     .model-with-provider code { overflow-wrap: anywhere; }
@@ -456,7 +460,7 @@
                         <div class="row g-2">
                           <div class="col-8">
                             <label class="form-label small mb-1" for="cx-llm-model">Модель</label>
-                            <select id="cx-llm-model" class="form-select form-select-sm"></select>
+                            <div class="d-flex align-items-center gap-2"><span id="cx-llm-mark"></span><select id="cx-llm-model" class="form-select form-select-sm"></select></div>
                           </div>
                           <div class="col-4">
                             <label class="form-label small mb-1" for="cx-llm-timeout">Таймаут, мс</label>

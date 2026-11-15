@@ -226,7 +226,8 @@ function row(request) {
   const kind = request.status === 'ok' ? 'ok' : 'error'
   const badge = kind === 'ok' ? 'text-bg-success' : 'text-bg-danger'
   const keyName = request.keyLabel ? ` (${request.keyLabel})` : ''
-  card.innerHTML = `<summary class="card-header d-flex align-items-center gap-2"><code>${escape(request.model || '—')}${escape(keyName)}</code><span class="text-body-secondary small ms-auto">${new Date(request.started).toLocaleString()}</span><span class="badge ${badge}">${escape(request.status || 'ошибка')}</span></summary><div class="card-body vstack gap-2">${request.error ? `<p class="error mb-0">${escape(request.error)}</p>` : ''}${facts.length ? `<p class="text-body-secondary small mb-0">${escape(facts.join(' · '))}</p>` : ''}${request.request ? `<strong>Запрос</strong><pre>${escape(request.request)}</pre>` : '<p class="text-body-secondary mb-0">Текст этого запроса не сохранён</p>'}${request.response ? `<strong>Ответ</strong><pre>${escape(request.response)}</pre>` : ''}</div>`
+  const requestProvider = providerOfDisplayModel(request.model)
+  card.innerHTML = `<summary class="card-header d-flex align-items-center gap-2">${requestProvider ? providerMark(requestProvider) : ''}<code>${escape(request.model || '—')}${escape(keyName)}</code><span class="text-body-secondary small ms-auto">${new Date(request.started).toLocaleString()}</span><span class="badge ${badge}">${escape(request.status || 'ошибка')}</span></summary><div class="card-body vstack gap-2">${request.error ? `<p class="error mb-0">${escape(request.error)}</p>` : ''}${facts.length ? `<p class="text-body-secondary small mb-0">${escape(facts.join(' · '))}</p>` : ''}${request.request ? `<strong>Запрос</strong><pre>${escape(request.request)}</pre>` : '<p class="text-body-secondary mb-0">Текст этого запроса не сохранён</p>'}${request.response ? `<strong>Ответ</strong><pre>${escape(request.response)}</pre>` : ''}</div>`
   return card
 }
 
@@ -282,7 +283,7 @@ function openConnect(available) {
   let current = ''
   status.textContent = ''
   form.hidden = true
-  const oauth = available.map((provider) => `<div class="d-flex justify-content-between align-items-center gap-3 border rounded p-3"><div><strong>${escape(provider.label)}</strong><br><span class="text-body-secondary small">${provider.loginKind === 'disabled' ? 'вход через подписку запрещён' : provider.loginKind}</span></div><button type="button" class="btn btn-primary btn-sm" data-connect="${provider.id}">Подключить</button></div>`).join('')
+  const oauth = available.map((provider) => `<div class="d-flex justify-content-between align-items-center gap-3 border rounded p-3"><div><strong class="model-with-provider">${providerMark(provider.id, provider.label)}<span>${escape(provider.label)}</span></strong><br><span class="text-body-secondary small">${provider.loginKind === 'disabled' ? 'вход через подписку запрещён' : provider.loginKind}</span></div><button type="button" class="btn btn-primary btn-sm" data-connect="${provider.id}">Подключить</button></div>`).join('')
   const custom = '<div class="d-flex justify-content-between align-items-center gap-3 border rounded p-3"><div><strong>OpenAI-совместимый API</strong><br><span class="text-body-secondary small">api key · OpenAI, OpenRouter, DeepSeek, Ollama, Anthropic</span></div><button type="button" class="btn btn-primary btn-sm" data-custom>Подключить</button></div>'
   list.innerHTML = oauth + custom
   list.querySelector('[data-custom]').onclick = () => {
@@ -344,7 +345,7 @@ function renderCatalog() {
   const sections = [...groups].map(([name, models]) => {
     const section = document.createElement('section')
     section.className = 'card catalog-group shadow-sm'
-    section.innerHTML = `<div class="card-header fw-semibold">${escape(name)}</div>`
+    section.innerHTML = `<div class="card-header fw-semibold model-with-provider">${providerMark(providerOfModel(models[0]?.id), name)}<span>${escape(name)}</span></div>`
     const list = document.createElement('div')
     list.className = 'list-group list-group-flush'
     list.append(...models.map(catalogItem))
@@ -362,19 +363,26 @@ function providerMark(provider, label = provider) {
   const id = providerId(provider)
   const custom = customProviderList.find((item) => item.id === id)
   const glyph = { codex: 'O', claude: 'A', grok: 'X', copilot: 'C', antigravity: 'G' }[id] ?? 'API'
-  let favicon = ''
-  if (custom?.baseUrl) {
+  const builtInLogo = ['codex', 'claude', 'grok', 'copilot', 'antigravity'].includes(id) ? `/providers/${id}.png` : ''
+  let favicon = builtInLogo ? `<img src="${builtInLogo}" alt="" aria-hidden="true">` : ''
+  if (!favicon && custom?.baseUrl) {
     try {
       const url = new URL(custom.baseUrl)
       favicon = `<img src="${escape(new URL('/favicon.ico', url).href)}" alt="" aria-hidden="true">`
     } catch { /* конфигурация уже проверена на сервере; оставляем заглушку */ }
   }
   const title = custom?.label || label || provider || 'Провайдер'
-  return `<span class="provider-mark ${custom ? 'custom' : escape(id)}" title="${escape(title)}" aria-label="${escape(title)}"><b>${glyph}</b>${favicon}</span>`
+  return `<span class="provider-mark ${custom ? 'custom' : escape(id)}${builtInLogo ? ' has-logo' : ''}" title="${escape(title)}" aria-label="${escape(title)}"><b>${glyph}</b>${favicon}</span>`
 }
 
 function providerOfModel(model) {
   return String(model ?? '').split('/', 1)[0] || 'custom'
+}
+
+/** Последний provider/model — фактически выбранная модель после pool/... → provider/model. */
+function providerOfDisplayModel(model) {
+  const matches = [...String(model ?? '').matchAll(/(?:^|[\s→(])([a-z][a-z0-9_-]*)\/\S+/gi)]
+  return matches.at(-1)?.[1]?.toLowerCase() || ''
 }
 
 // Ошибка загрузки favicon не должна оставлять значок «битого» изображения: под ним уже есть API-заглушка.
@@ -399,7 +407,7 @@ function catalogItem(model) {
   const card = document.createElement('article')
   card.className = 'list-group-item catalog-item d-flex justify-content-between gap-3'
   const tags = [
-    ['provider', icon.provider, model.provider],
+    ['provider', providerMark(providerOfModel(model.id), model.provider), model.provider],
     [model.capability, model.capability === 'image' ? icon.image : model.capability === 'video' ? icon.video : icon.chat, model.capability === 'image' ? 'изображение' : model.capability === 'video' ? 'видео' : 'чат'],
     model.enabled ? null : ['hidden', icon.hidden, 'скрыта'],
     model.contextWindow ? ['context', icon.context, `${Math.round(model.contextWindow / 1000)}K контекст`] : null,
@@ -410,7 +418,7 @@ function catalogItem(model) {
   const price = model.price?.input
     ? `<span>за 100K</span><div>вход <strong>${escape(model.price.input)}</strong></div><div>выход <strong>${escape(model.price.output)}</strong></div>`
     : model.price?.unit ? `<strong>${escape(model.price.unit)}</strong>` : ''
-  card.innerHTML = `<div class="min-w-0"><strong class="model-with-provider">${providerMark(model.provider)}<span>${escape(model.name)}</span></strong><div class="catalog-id"><code>${escape(model.id)}</code><button type="button" class="btn btn-outline-secondary btn-icon" title="Копировать идентификатор" aria-label="Копировать идентификатор"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button></div>${model.description ? `<p class="text-body-secondary small mb-0">${escape(model.description)}</p>` : ''}<div class="tags">${tags.map(([kind, mark, text]) => `<span class="badge rounded-pill ${kind === 'hidden' ? 'text-bg-danger' : 'bg-body-tertiary text-body-secondary border'}">${mark}${escape(text)}</span>`).join('')}</div></div>${price ? `<div class="price-col" title="${escape(model.price.title)}">${price}</div>` : ''}`
+  card.innerHTML = `<div class="min-w-0"><strong class="model-with-provider">${providerMark(providerOfModel(model.id), model.provider)}<span>${escape(model.name)}</span></strong><div class="catalog-id"><code>${escape(model.id)}</code><button type="button" class="btn btn-outline-secondary btn-icon" title="Копировать идентификатор" aria-label="Копировать идентификатор"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button></div>${model.description ? `<p class="text-body-secondary small mb-0">${escape(model.description)}</p>` : ''}<div class="tags">${tags.map(([kind, mark, text]) => `<span class="badge rounded-pill ${kind === 'hidden' ? 'text-bg-danger' : 'bg-body-tertiary text-body-secondary border'}">${mark}${escape(text)}</span>`).join('')}</div></div>${price ? `<div class="price-col" title="${escape(model.price.title)}">${price}</div>` : ''}`
   card.querySelector('button').onclick = (event) => copyText(model.id, event.currentTarget)
   if (model.capability === 'chat') card.querySelector('.tags').insertAdjacentHTML('afterend', tierSelect(model.id))
   const select = card.querySelector('[data-tier]')
@@ -446,7 +454,7 @@ async function fillModels(card, provider, refresh = false) {
   }
   const enabled = payload.data.filter((model) => model.enabled).length
   card.querySelector('[data-summary]').textContent = `${provider.accounts.length ? 'подключён' : 'не подключён'} · модели ${enabled}/${payload.data.length}`
-  target.innerHTML = `<details class="border rounded model-picker"><summary class="d-flex justify-content-between align-items-center gap-2 px-3 py-2"><strong>Доступные модели</strong><span class="text-body-secondary small">${enabled} из ${payload.data.length}</span></summary><div class="p-3 vstack gap-2"><div class="d-flex gap-2"><button type="button" class="btn btn-outline-secondary btn-sm" data-all>Все</button><button type="button" class="btn btn-outline-secondary btn-sm" data-none>Ничего</button></div><div class="model-list vstack">${payload.data.map((model) => `<label class="form-check form-switch py-2 mb-0"><input class="form-check-input" type="checkbox" role="switch" value="${escape(model.id)}" ${model.enabled ? 'checked' : ''}><span class="form-check-label"><strong>${escape(model.name || model.id)}</strong>${model.description ? `<small class="d-block text-body-secondary">${escape(model.description)}</small>` : ''}</span></label>`).join('')}</div><button type="button" class="btn btn-primary btn-sm" data-save-models>Сохранить модели</button></div></details>`
+  target.innerHTML = `<details class="border rounded model-picker"><summary class="d-flex justify-content-between align-items-center gap-2 px-3 py-2"><strong>Доступные модели</strong><span class="text-body-secondary small">${enabled} из ${payload.data.length}</span></summary><div class="p-3 vstack gap-2"><div class="d-flex gap-2"><button type="button" class="btn btn-outline-secondary btn-sm" data-all>Все</button><button type="button" class="btn btn-outline-secondary btn-sm" data-none>Ничего</button></div><div class="model-list vstack">${payload.data.map((model) => `<label class="form-check form-switch py-2 mb-0"><input class="form-check-input" type="checkbox" role="switch" value="${escape(model.id)}" ${model.enabled ? 'checked' : ''}><span class="form-check-label"><strong class="model-with-provider">${providerMark(provider.id, provider.label)}<span>${escape(model.name || model.id)}</span></strong>${model.description ? `<small class="d-block text-body-secondary">${escape(model.description)}</small>` : ''}</span></label>`).join('')}</div><button type="button" class="btn btn-primary btn-sm" data-save-models>Сохранить модели</button></div></details>`
   target.querySelector('[data-all]').onclick = () => target.querySelectorAll('input').forEach((input) => { input.checked = true })
   target.querySelector('[data-none]').onclick = () => target.querySelectorAll('input').forEach((input) => { input.checked = false })
   target.querySelector('[data-save-models]').onclick = async () => {
@@ -521,7 +529,8 @@ function sideLimit(provider) {
   const name = document.createElement('div')
   name.className = 'side-limit-name'
   const label = document.createElement('span')
-  label.textContent = provider.label
+  label.innerHTML = `${providerMark(provider.id, provider.label)}<span>${escape(provider.label)}</span>`
+  label.className = 'model-with-provider'
   name.append(label)
   section.append(name, ...provider.usage.windows.map(sideMeter))
   return section
@@ -883,6 +892,10 @@ async function fillClassifierModels() {
   select.replaceChildren(...(rows.length ? rows.map((model) => new Option(`${model.provider}: ${model.name || model.id}`, model.id, false, model.id === current)) : [new Option('Сначала войдите в провайдера', '')]))
   if (current && !rows.some((model) => model.id === current)) select.add(new Option(current, current, false, true), 0)
   select.value = current
+  const mark = document.querySelector('#cx-llm-mark')
+  const syncMark = () => { mark.innerHTML = select.value ? providerMark(providerOfModel(select.value)) : '' }
+  select.onchange = syncMark
+  syncMark()
 }
 document.querySelector('#cx-save').onclick = async () => {
   const status = document.querySelector('#cx-status')
@@ -956,7 +969,7 @@ function renderPoolMembers() {
     button.type = 'button'
     button.className = 'list-group-item list-group-item-action text-start d-flex align-items-center gap-2'
     const tier = modelTiers[model.id]
-    button.innerHTML = `<span class="min-w-0 flex-grow-1"><span class="model-with-provider">${providerMark(model.provider)}<code>${escape(model.id)}</code></span><small class="d-block text-body-secondary">${escape(model.name || model.provider || '')}</small></span>${tier ? `<span class="badge rounded-pill border tier-${tier}">${tierName[tier]}</span>` : ''}`
+    button.innerHTML = `<span class="min-w-0 flex-grow-1"><span class="model-with-provider">${providerMark(providerOfModel(model.id), model.provider)}<code>${escape(model.id)}</code></span><small class="d-block text-body-secondary">${escape(model.name || model.provider || '')}</small></span>${tier ? `<span class="badge rounded-pill border tier-${tier}">${tierName[tier]}</span>` : ''}`
     button.onclick = () => {
       poolMembers.push(model.id)
       renderPoolPicked()
@@ -1328,7 +1341,7 @@ function renderProxy(overview) {
     const value = per[provider.id] || ''
     const mode = value === 'direct' ? 'direct' : value ? 'custom' : ''
     row.innerHTML = `
-      <div class="col-md-3"><span class="small">${escape(provider.label)}</span></div>
+      <div class="col-md-3"><span class="small model-with-provider">${providerMark(provider.id, provider.label)}<span>${escape(provider.label)}</span></span></div>
       <div class="col-md-3">
         <select class="form-select form-select-sm" data-mode>
           <option value="">Глобальный</option>
@@ -1550,7 +1563,7 @@ function chartSlices(models, mode) {
   const ranked = models.map((model) => ({ ...model, total: viewTotal(model, mode) })).sort((left, right) => right.total - left.total)
   const head = ranked.slice(0, 7)
   const rest = ranked.slice(7).reduce((sum, model) => sum + model.total, 0)
-  const slices = head.map((model, index) => ({ label: model.model, total: model.total, color: chartColors[index % chartColors.length] }))
+  const slices = head.map((model, index) => ({ label: model.model, provider: model.provider, total: model.total, color: chartColors[index % chartColors.length] }))
   if (rest) slices.push({ label: 'Остальные', total: rest, color: '#6c757d' })
   return slices.filter((slice) => slice.total > 0)
 }
@@ -1560,7 +1573,7 @@ function shareChart(models, mode) {
   const total = slices.reduce((sum, slice) => sum + slice.total, 0)
   if (!total) return `<p class="text-body-secondary mb-0">${mode === 'hide' ? 'Без кеша токенов пока нет.' : 'Токенов пока нет.'}</p>`
   const bar = slices.map((slice) => `<span style="width:${(slice.total / total) * 100}%;background:${slice.color}" title="${escape(slice.label)}: ${formatTokens(slice.total)}"></span>`).join('')
-  const legend = slices.map((slice) => `<span class="small"><i class="stats-swatch" style="background:${slice.color}"></i> ${escape(slice.label)} · ${Math.round((slice.total / total) * 100)}%</span>`).join('')
+  const legend = slices.map((slice) => `<span class="small model-with-provider"><i class="stats-swatch" style="background:${slice.color}"></i>${slice.provider ? providerMark(slice.provider) : ''}<span>${escape(slice.label)} · ${Math.round((slice.total / total) * 100)}%</span></span>`).join('')
   const composition = mode === 'split' ? compositionChart(models) : ''
   return `<div class="stats-share" role="img" aria-label="Доля токенов по моделям">${bar}</div><div class="stats-legend mt-2">${legend}</div>${composition}`
 }
@@ -1589,7 +1602,7 @@ function barChart(models, mode) {
   const marks = rows.map((model) => {
     const input = inputParts(model, mode).map((part) => segment(part.value, part.color, part.title)).join('')
     const total = mode === 'hide' ? freshInput(model) : model.input
-    return `<div class="stats-io-row"><span class="small text-truncate" title="${escape(model.model)}">${escape(shortModel(model.model))}</span><div class="vstack gap-1"><div class="stats-io-bar">${input}</div><div class="stats-io-bar">${segment(model.output, '#fd7e14', 'Выход')}</div></div><span class="small text-body-secondary text-end">${formatTokens(total)} / ${formatTokens(model.output)}</span></div>`
+    return `<div class="stats-io-row"><span class="small text-truncate model-with-provider" title="${escape(model.model)}">${providerMark(model.provider)}<span>${escape(shortModel(model.model))}</span></span><div class="vstack gap-1"><div class="stats-io-bar">${input}</div><div class="stats-io-bar">${segment(model.output, '#fd7e14', 'Выход')}</div></div><span class="small text-body-secondary text-end">${formatTokens(total)} / ${formatTokens(model.output)}</span></div>`
   }).join('')
   return `<div class="vstack gap-2" role="img" aria-label="Вход и выход токенов">${marks}</div><div class="stats-legend mt-2">${barLegend(mode, rows)}</div>`
 }
@@ -1633,7 +1646,7 @@ function limitChart(models) {
   if (!rows.length) return ''
   const bars = rows.map((row) => {
     const percent = Math.round(row.percent * 10) / 10
-    return `<div><div class="d-flex justify-content-between gap-2 small mb-1"><span>${escape(row.provider)} · ${row.name}</span><strong>≈ ${String(percent).replace('.', ',')}%</strong></div><div class="progress" style="height:8px"><div class="progress-bar ${usageBar(percent)}" style="width:${Math.min(100, percent)}%"></div></div></div>`
+    return `<div><div class="d-flex justify-content-between gap-2 small mb-1"><span class="model-with-provider">${providerMark(row.provider)}<span>${escape(row.provider)} · ${row.name}</span></span><strong>≈ ${String(percent).replace('.', ',')}%</strong></div><div class="progress" style="height:8px"><div class="progress-bar ${usageBar(percent)}" style="width:${Math.min(100, percent)}%"></div></div></div>`
   }).join('')
   return `<div class="col-12"><article class="card shadow-sm"><div class="card-body vstack gap-2"><h2 class="h6 mb-1">Доля лимита по провайдерам</h2>${bars}</div></article></div>`
 }

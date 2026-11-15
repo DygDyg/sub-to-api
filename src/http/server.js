@@ -372,6 +372,7 @@ function keyMatches(expected, given) {
 function staticPage(pathname) {
   if (pathname === '/') return 'index.html'
   if (pathname === '/app.js' || pathname === '/icon.png' || pathname === '/bootstrap.min.css') return pathname.slice(1)
+  if (/^\/providers\/(?:antigravity|claude|codex|copilot|grok)\.png$/.test(pathname)) return pathname.slice(1)
   return ''
 }
 

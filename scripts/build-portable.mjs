@@ -44,6 +44,11 @@ const config = {
     'index.html': 'web/index.html',
     'app.js': 'web/app.js',
     'icon.png': 'web/icon.png',
+    'providers/antigravity.png': 'web/providers/antigravity.png',
+    'providers/claude.png': 'web/providers/claude.png',
+    'providers/codex.png': 'web/providers/codex.png',
+    'providers/copilot.png': 'web/providers/copilot.png',
+    'providers/grok.png': 'web/providers/grok.png',
     'bootstrap.min.css': 'web/bootstrap.min.css',
   },
 }
