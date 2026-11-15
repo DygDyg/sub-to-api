@@ -57,7 +57,20 @@
     .provider[data-id="grok"] { --dot: var(--bs-body-color); }
     .provider[data-id="copilot"] { --dot: #1f6feb; }
     .provider[data-id="antigravity"] { --dot: #4285f4; }
-    .provider > summary h3::before { content: ""; width: .55rem; height: .55rem; border-radius: 50%; background: var(--dot); display: inline-block; margin-right: .45rem; }
+    .provider > summary h3::before { display: none; }
+    .provider-mark { --provider-mark: var(--bs-secondary-color); display: inline-flex; width: 1.2rem; height: 1.2rem; flex: none; align-items: center; justify-content: center; border-radius: .3rem; color: #fff; background: var(--provider-mark); font-size: .62rem; font-weight: 800; line-height: 1; font-family: system-ui, sans-serif; vertical-align: -.18em; }
+    .provider-mark.codex { --provider-mark: #10a37f; }
+    .provider-mark.claude { --provider-mark: #d97757; }
+    .provider-mark.grok { --provider-mark: #333; }
+    .provider-mark.copilot { --provider-mark: #1f6feb; }
+    .provider-mark.antigravity { --provider-mark: #4285f4; }
+    .provider-mark.custom { --provider-mark: #6f42c1; position: relative; overflow: hidden; }
+    .provider-mark b { font: inherit; }
+    .provider-mark img { position: absolute; inset: 0; width: 100%; height: 100%; padding: .08rem; object-fit: contain; background: var(--bs-body-bg); }
+    .provider > summary h3 { display: inline-flex; align-items: center; gap: .45rem; }
+    .model-with-provider { display: inline-flex; align-items: center; gap: .4rem; min-width: 0; }
+    .model-with-provider code { overflow-wrap: anywhere; }
+    .pool-member .provider-mark { margin-right: .1rem; }
     #requests:empty, #providers:empty { display: flex; align-items: center; justify-content: center; min-height: 9rem; padding: 1.75rem; text-align: center; color: var(--bs-secondary-color); border: 1px dashed var(--bs-border-color); border-radius: var(--bs-border-radius); background: var(--bs-body-bg); }
     #requests:empty::before, #providers:empty::before { max-width: 36ch; line-height: 1.5; }
     #requests:empty::before { content: "Журнал пуст. Запросы появятся после первого вызова API."; }
@@ -545,7 +558,7 @@
           <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
             <div>
               <h1 class="h3 mb-1">Статистика</h1>
-              <p class="text-body-secondary mb-0">Токены по фактическим моделям и оценка доли текущего лимита.</p>
+              <p class="text-body-secondary mb-0">Токены по фактическим моделям и оценка доли текущего лимита по провайдерам.</p>
             </div>
             <div class="d-flex flex-wrap gap-3">
               <div>

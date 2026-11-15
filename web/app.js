@@ -4,6 +4,7 @@ let poolCatalog = []
 let poolMembers = []
 let poolEditingId = null
 let poolDragIndex = -1
+let customProviderList = []
 const requests = document.querySelector('#requests')
 const journalPending = document.querySelector('#journal-pending')
 let journalWatch = false
@@ -240,7 +241,7 @@ function renderProvider(provider, opened) {
     ? provider.accounts.map((account) => `<li class="list-group-item d-flex justify-content-between align-items-center gap-2"><span>${escape(account.label ?? account.key)}${account.isDefault ? ' · основной' : ''}</span><button type="button" class="btn btn-outline-danger btn-sm" data-logout="${escape(account.key)}">Выйти</button></li>`).join('')
     : '<li class="list-group-item text-body-secondary">Нет аккаунтов</li>'
   card.innerHTML = `
-    <summary class="card-header d-flex align-items-center gap-2"><div class="d-flex flex-grow-1 justify-content-between align-items-baseline gap-2 min-w-0"><h3 class="h6 mb-0">${escape(provider.label)}</h3><p class="text-body-secondary small mb-0 text-truncate" data-summary>${provider.loginKind}</p></div></summary>
+    <summary class="card-header d-flex align-items-center gap-2"><div class="d-flex flex-grow-1 justify-content-between align-items-baseline gap-2 min-w-0"><h3 class="h6 mb-0">${providerMark(provider.id, provider.label)}${escape(provider.label)}</h3><p class="text-body-secondary small mb-0 text-truncate" data-summary>${provider.loginKind}</p></div></summary>
     <div class="card-body vstack gap-3">
       <ul class="list-group">${accounts}</ul>
       <div data-usage class="vstack gap-3"><p class="text-body-secondary mb-0">Квота загружается…</p></div>
@@ -353,6 +354,34 @@ function renderCatalog() {
   document.querySelector('#catalog').replaceChildren(...sections)
 }
 
+function providerId(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'custom'
+}
+
+function providerMark(provider, label = provider) {
+  const id = providerId(provider)
+  const custom = customProviderList.find((item) => item.id === id)
+  const glyph = { codex: 'O', claude: 'A', grok: 'X', copilot: 'C', antigravity: 'G' }[id] ?? 'API'
+  let favicon = ''
+  if (custom?.baseUrl) {
+    try {
+      const url = new URL(custom.baseUrl)
+      favicon = `<img src="${escape(new URL('/favicon.ico', url).href)}" alt="" aria-hidden="true">`
+    } catch { /* конфигурация уже проверена на сервере; оставляем заглушку */ }
+  }
+  const title = custom?.label || label || provider || 'Провайдер'
+  return `<span class="provider-mark ${custom ? 'custom' : escape(id)}" title="${escape(title)}" aria-label="${escape(title)}"><b>${glyph}</b>${favicon}</span>`
+}
+
+function providerOfModel(model) {
+  return String(model ?? '').split('/', 1)[0] || 'custom'
+}
+
+// Ошибка загрузки favicon не должна оставлять значок «битого» изображения: под ним уже есть API-заглушка.
+document.addEventListener('error', (event) => {
+  if (event.target instanceof HTMLImageElement && event.target.closest('.provider-mark')) event.target.remove()
+}, true)
+
 const icon = {
   provider: '<svg viewBox="0 0 24 24"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="8" r="4"/></svg>',
   chat: '<svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H7l-4 3V12a8 8 0 1 1 18 0z"/></svg>',
@@ -381,7 +410,7 @@ function catalogItem(model) {
   const price = model.price?.input
     ? `<span>за 100K</span><div>вход <strong>${escape(model.price.input)}</strong></div><div>выход <strong>${escape(model.price.output)}</strong></div>`
     : model.price?.unit ? `<strong>${escape(model.price.unit)}</strong>` : ''
-  card.innerHTML = `<div class="min-w-0"><strong>${escape(model.name)}</strong><div class="catalog-id"><code>${escape(model.id)}</code><button type="button" class="btn btn-outline-secondary btn-icon" title="Копировать идентификатор" aria-label="Копировать идентификатор"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button></div>${model.description ? `<p class="text-body-secondary small mb-0">${escape(model.description)}</p>` : ''}<div class="tags">${tags.map(([kind, mark, text]) => `<span class="badge rounded-pill ${kind === 'hidden' ? 'text-bg-danger' : 'bg-body-tertiary text-body-secondary border'}">${mark}${escape(text)}</span>`).join('')}</div></div>${price ? `<div class="price-col" title="${escape(model.price.title)}">${price}</div>` : ''}`
+  card.innerHTML = `<div class="min-w-0"><strong class="model-with-provider">${providerMark(model.provider)}<span>${escape(model.name)}</span></strong><div class="catalog-id"><code>${escape(model.id)}</code><button type="button" class="btn btn-outline-secondary btn-icon" title="Копировать идентификатор" aria-label="Копировать идентификатор"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg></button></div>${model.description ? `<p class="text-body-secondary small mb-0">${escape(model.description)}</p>` : ''}<div class="tags">${tags.map(([kind, mark, text]) => `<span class="badge rounded-pill ${kind === 'hidden' ? 'text-bg-danger' : 'bg-body-tertiary text-body-secondary border'}">${mark}${escape(text)}</span>`).join('')}</div></div>${price ? `<div class="price-col" title="${escape(model.price.title)}">${price}</div>` : ''}`
   card.querySelector('button').onclick = (event) => copyText(model.id, event.currentTarget)
   if (model.capability === 'chat') card.querySelector('.tags').insertAdjacentHTML('afterend', tierSelect(model.id))
   const select = card.querySelector('[data-tier]')
@@ -927,7 +956,7 @@ function renderPoolMembers() {
     button.type = 'button'
     button.className = 'list-group-item list-group-item-action text-start d-flex align-items-center gap-2'
     const tier = modelTiers[model.id]
-    button.innerHTML = `<span class="min-w-0 flex-grow-1"><code>${escape(model.id)}</code><small class="d-block text-body-secondary">${escape(model.name || model.provider || '')}</small></span>${tier ? `<span class="badge rounded-pill border tier-${tier}">${tierName[tier]}</span>` : ''}`
+    button.innerHTML = `<span class="min-w-0 flex-grow-1"><span class="model-with-provider">${providerMark(model.provider)}<code>${escape(model.id)}</code></span><small class="d-block text-body-secondary">${escape(model.name || model.provider || '')}</small></span>${tier ? `<span class="badge rounded-pill border tier-${tier}">${tierName[tier]}</span>` : ''}`
     button.onclick = () => {
       poolMembers.push(model.id)
       renderPoolPicked()
@@ -954,7 +983,7 @@ function renderPoolPickedRows() {
     row.className = 'list-group-item d-flex align-items-center gap-2 pool-member'
     const name = poolModelName(id)
     const tier = tierBadge(id)
-    row.innerHTML = `<span class="pool-grip" title="Перетащите, чтобы изменить порядок">${poolIcons.grip}</span><span class="text-body-secondary small" style="width:1.25rem">${index + 1}</span><span class="min-w-0 flex-grow-1"><code>${escape(id)}</code>${name ? `<small class="d-block text-body-secondary">${escape(name)}</small>` : ''}</span>${tier}<span class="pool-actions"><button type="button" class="btn btn-outline-secondary btn-icon" data-up title="Выше" aria-label="Выше"${index === 0 ? ' disabled' : ''}>${poolIcons.up}</button><button type="button" class="btn btn-outline-secondary btn-icon" data-down title="Ниже" aria-label="Ниже"${index === poolMembers.length - 1 ? ' disabled' : ''}>${poolIcons.down}</button><button type="button" class="btn btn-outline-secondary btn-icon" data-remove title="Убрать" aria-label="Убрать">${poolIcons.remove}</button></span>`
+    row.innerHTML = `<span class="pool-grip" title="Перетащите, чтобы изменить порядок">${poolIcons.grip}</span><span class="text-body-secondary small" style="width:1.25rem">${index + 1}</span><span class="min-w-0 flex-grow-1"><span class="model-with-provider">${providerMark(providerOfModel(id))}<code>${escape(id)}</code></span>${name ? `<small class="d-block text-body-secondary">${escape(name)}</small>` : ''}</span>${tier}<span class="pool-actions"><button type="button" class="btn btn-outline-secondary btn-icon" data-up title="Выше" aria-label="Выше"${index === 0 ? ' disabled' : ''}>${poolIcons.up}</button><button type="button" class="btn btn-outline-secondary btn-icon" data-down title="Ниже" aria-label="Ниже"${index === poolMembers.length - 1 ? ' disabled' : ''}>${poolIcons.down}</button><button type="button" class="btn btn-outline-secondary btn-icon" data-remove title="Убрать" aria-label="Убрать">${poolIcons.remove}</button></span>`
     const grip = row.querySelector('.pool-grip')
     grip.draggable = true
     grip.ondragstart = (event) => {
@@ -1056,7 +1085,7 @@ async function loadPools() {
     card.className = 'card shadow-sm pool-card'
     const warn = pool.strategy === 'by-complexity' && !complexityEnabled() ? '<small class="d-block text-warning">Режим выбора по сложности выключен в настройках — пул работает по остатку лимита.</small>' : ''
     const via = pool.strategy === 'by-complexity' && pool.classifier ? ` · ${classifierName[pool.classifier] || pool.classifier}` : ''
-    card.innerHTML = `<div class="card-body d-flex justify-content-between align-items-start gap-3"><div class="min-w-0"><code>pool/${escape(pool.id)}</code><small class="d-block text-body-secondary">${escape(strategyName[pool.strategy] || pool.strategy)}${escape(via)} · ${pluralModels(pool.members.length)}</small>${warn}<ol class="small text-body-secondary mb-0 mt-2 ps-3">${pool.members.map((id) => `<li><code>${escape(id)}</code>${pool.strategy === 'by-complexity' ? ` ${tierBadge(id)}` : ''}</li>`).join('')}</ol></div><div class="d-flex gap-2 flex-none"><button type="button" class="btn btn-outline-secondary btn-icon" data-edit title="Редактировать" aria-label="Редактировать">${poolIcons.pencil}</button><button type="button" class="btn btn-outline-secondary btn-sm" data-delete>Удалить</button></div></div>`
+    card.innerHTML = `<div class="card-body d-flex justify-content-between align-items-start gap-3"><div class="min-w-0"><code>pool/${escape(pool.id)}</code><small class="d-block text-body-secondary">${escape(strategyName[pool.strategy] || pool.strategy)}${escape(via)} · ${pluralModels(pool.members.length)}</small>${warn}<ol class="small text-body-secondary mb-0 mt-2 ps-3">${pool.members.map((id) => `<li><span class="model-with-provider">${providerMark(providerOfModel(id))}<code>${escape(id)}</code></span>${pool.strategy === 'by-complexity' ? ` ${tierBadge(id)}` : ''}</li>`).join('')}</ol></div><div class="d-flex gap-2 flex-none"><button type="button" class="btn btn-outline-secondary btn-icon" data-edit title="Редактировать" aria-label="Редактировать">${poolIcons.pencil}</button><button type="button" class="btn btn-outline-secondary btn-sm" data-delete>Удалить</button></div></div>`
     card.querySelector('[data-edit]').onclick = () => openPoolDialog(pool)
     card.querySelector('[data-delete]').onclick = async () => {
       await api(`/api/pools/${encodeURIComponent(pool.id)}`, { method: 'DELETE' })
@@ -1354,7 +1383,6 @@ document.querySelector('#proxy-test').onclick = async () => {
   } catch (error) { status.textContent = error.message }
 }
 
-let customProviderList = []
 function renderCustomProviders(list) {
   customProviderList = list
 }
@@ -1485,7 +1513,7 @@ function statsTable(models, mode) {
   const rows = models.map((model) => {
     const input = mode === 'include' ? model.input : freshInput(model)
     const cacheCell = mode === 'split' ? `<td class="text-end">${cacheCellText(model)}</td>` : ''
-    return `<tr><td><code>${escape(model.model)}</code></td><td class="text-end">${formatTokens(input)}</td>${cacheCell}<td class="text-end">${formatTokens(model.output)}</td><td class="text-end">${formatTokens(viewTotal(model, mode))}</td><td>${limitCell(model.windows)}</td></tr>`
+    return `<tr><td><span class="model-with-provider">${providerMark(model.provider)}<code>${escape(model.model)}</code></span></td><td class="text-end">${formatTokens(input)}</td>${cacheCell}<td class="text-end">${formatTokens(model.output)}</td><td class="text-end">${formatTokens(viewTotal(model, mode))}</td><td>${limitCell(model.windows)}</td></tr>`
   }).join('')
   return `<div class="table-responsive card shadow-sm"><table class="table align-middle mb-0"><thead><tr><th>Модель</th><th class="text-end">Вход</th>${cacheHead}<th class="text-end">Выход</th><th class="text-end">Всего</th><th>Лимит</th></tr></thead><tbody>${rows}</tbody></table></div>`
 }
@@ -1587,14 +1615,27 @@ function barLegend(mode, rows) {
 }
 
 function limitChart(models) {
-  const rows = models.flatMap((model) => (model.windows ?? []).filter((window) => Number.isFinite(window.percent)).map((window) => ({
-    model: model.model,
-    name: window.kind === 'session' ? '5 ч' : window.kind === 'weekly' ? 'неделя' : 'окно',
-    percent: window.percent,
-  })))
+  // Доля лимита считается по каждому фактическому провайдеру, а не отдельной строкой на модель.
+  // Вклад моделей уже рассчитан сервером относительно общего трафика провайдера, поэтому его можно сложить.
+  const grouped = new Map()
+  for (const model of models) {
+    const provider = model.provider || String(model.model).split('/', 1)[0] || 'Другие'
+    for (const window of model.windows ?? []) {
+      if (!Number.isFinite(window.percent)) continue
+      const name = window.kind === 'session' ? '5 ч' : window.kind === 'weekly' ? 'неделя' : 'окно'
+      const key = `${provider}\0${name}`
+      const row = grouped.get(key) ?? { provider, name, percent: 0 }
+      row.percent += window.percent
+      grouped.set(key, row)
+    }
+  }
+  const rows = [...grouped.values()].sort((left, right) => left.provider.localeCompare(right.provider) || left.name.localeCompare(right.name))
   if (!rows.length) return ''
-  const bars = rows.map((row) => `<div><div class="d-flex justify-content-between gap-2 small mb-1"><span>${escape(shortModel(row.model))} · ${row.name}</span><strong>≈ ${String(row.percent).replace('.', ',')}%</strong></div><div class="progress" style="height:8px"><div class="progress-bar ${usageBar(row.percent)}" style="width:${Math.min(100, row.percent)}%"></div></div></div>`).join('')
-  return `<div class="col-12"><article class="card shadow-sm"><div class="card-body vstack gap-2"><h2 class="h6 mb-1">Доля лимита</h2>${bars}</div></article></div>`
+  const bars = rows.map((row) => {
+    const percent = Math.round(row.percent * 10) / 10
+    return `<div><div class="d-flex justify-content-between gap-2 small mb-1"><span>${escape(row.provider)} · ${row.name}</span><strong>≈ ${String(percent).replace('.', ',')}%</strong></div><div class="progress" style="height:8px"><div class="progress-bar ${usageBar(percent)}" style="width:${Math.min(100, percent)}%"></div></div></div>`
+  }).join('')
+  return `<div class="col-12"><article class="card shadow-sm"><div class="card-body vstack gap-2"><h2 class="h6 mb-1">Доля лимита по провайдерам</h2>${bars}</div></article></div>`
 }
 
 function shortModel(model) {
