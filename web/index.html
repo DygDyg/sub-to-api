@@ -39,8 +39,8 @@
     nav.tabs svg, .btn-icon svg, .tags svg { stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
     nav.tabs svg, .btn-icon svg { width: 1rem; height: 1rem; }
     .tags svg { width: .75rem; height: .75rem; }
-    .tags .provider-mark { width: .9rem; height: .9rem; font-size: .48rem; border-radius: .22rem; }
-    .stats-legend .provider-mark { width: 1rem; height: 1rem; }
+    .tags .provider-mark { font-size: .8em; border-radius: .18em; }
+    .stats-legend .provider-mark { font-size: .9em; }
     .tab { display: none; }
     .tab.active { display: block; }
     .btn-icon { width: 2.1rem; height: 2.1rem; padding: 0; display: inline-flex; align-items: center; justify-content: center; flex: none; }
@@ -60,7 +60,8 @@
     .provider[data-id="copilot"] { --dot: #1f6feb; }
     .provider[data-id="antigravity"] { --dot: #4285f4; }
     .provider > summary h3::before { display: none; }
-    .provider-mark { --provider-mark: var(--bs-secondary-color); display: inline-flex; width: 1.2rem; height: 1.2rem; flex: none; align-items: center; justify-content: center; border-radius: .3rem; color: #fff; background: var(--provider-mark); font-size: .62rem; font-weight: 800; line-height: 1; font-family: system-ui, sans-serif; vertical-align: -.18em; }
+    /* Логотип всегда равен текущему размеру текста: без крупных значков в таблицах и мелких — в заголовках. */
+    .provider-mark { --provider-mark: var(--bs-secondary-color); position: relative; overflow: hidden; display: inline-flex; width: 1em; height: 1em; flex: 0 0 1em; align-items: center; justify-content: center; border-radius: .18em; color: #fff; background: var(--provider-mark); font-size: 1em; font-weight: 800; line-height: 1; font-family: system-ui, sans-serif; vertical-align: -.12em; }
     .provider-mark.codex { --provider-mark: #10a37f; }
     .provider-mark.claude { --provider-mark: #d97757; }
     .provider-mark.grok { --provider-mark: #333; }
