@@ -14,19 +14,88 @@ public static class TrayDpi {
 '@
   [void][TrayDpi]::SetProcessDPIAware()
 } catch {}
+
+function Initialize-TrayWindow {
+  if ('TrayWindow' -as [type]) { return }
+  Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class TrayWindow {
+  [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+}
+'@
+}
+
+function Set-TrayConsole([int]$Command) {
+  try {
+    Initialize-TrayWindow
+    $window = [TrayWindow]::GetConsoleWindow()
+    if ($window -ne [IntPtr]::Zero) { [void][TrayWindow]::ShowWindow($window, $Command) }
+  } catch {}
+}
+
+# Session 0 (service / "run whether user is logged on or not") has no tray.
+$sessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+if ($sessionId -le 0) {
+  Write-Error "Tray icon cannot appear: process is in session 0. Start SubToAPI from the logged-on user session, not as a service." -ErrorAction Continue
+  exit 1
+}
+$explorerDeadline = (Get-Date).AddSeconds(30)
+while (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $sessionId })) {
+  if ((Get-Date) -gt $explorerDeadline) {
+    Write-Error "Tray icon cannot appear: explorer.exe is not running in session $sessionId." -ErrorAction Continue
+    exit 1
+  }
+  Start-Sleep -Milliseconds 500
+}
+Write-Output "tray start session=$sessionId user=$env:USERNAME"
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $url = "http://127.0.0.1:$Port/"
-$iconPath = Join-Path $PSScriptRoot 'icon.ico'
-if (-not (Test-Path -LiteralPath $iconPath)) { $iconPath = Join-Path $PSScriptRoot '..\assets\icon.ico' }
-$icon = New-Object System.Drawing.Icon $iconPath
+$icon = $null
+foreach ($candidate in @(
+  (Join-Path $PSScriptRoot 'icon.ico'),
+  (Join-Path $PSScriptRoot '..\assets\icon.ico')
+)) {
+  if (-not (Test-Path -LiteralPath $candidate)) { continue }
+  try { $icon = New-Object System.Drawing.Icon $candidate; break }
+  catch { Write-Error "Tray icon file failed: $candidate :: $($_.Exception.Message)" -ErrorAction Continue }
+}
+if (-not $icon) {
+  $bitmap = New-Object System.Drawing.Bitmap 16, 16
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  $graphics.Clear([System.Drawing.Color]::FromArgb(18, 183, 106))
+  $graphics.Dispose()
+  $icon = [System.Drawing.Icon]::FromHandle($bitmap.GetHicon())
+}
 $script:popupWidth = 320
 
+# Windows 10 drops Shell_NotifyIcon if the process was created hidden or minimized.
+# Show the console, register the icon, then hide it. Windows 11 only needs this when the console is hidden.
+$script:windows10 = [Environment]::OSVersion.Version.Build -lt 22000
+$consoleHidden = $true
+try {
+  Initialize-TrayWindow
+  $console = [TrayWindow]::GetConsoleWindow()
+  if ($console -ne [IntPtr]::Zero) { $consoleHidden = -not [TrayWindow]::IsWindowVisible($console) }
+} catch {}
+if ($consoleHidden -or $script:windows10) { Set-TrayConsole 5 }
 $notify = New-Object System.Windows.Forms.NotifyIcon
 $notify.Icon = $icon
 $notify.Text = "SubToAPI :$Port"
 $notify.Visible = $true
+function Update-TrayIcon {
+  $notify.Visible = $true
+  $notify.Visible = $false
+  $notify.Visible = $true
+}
+Update-TrayIcon
+[System.Windows.Forms.Application]::DoEvents()
+Set-TrayConsole 0
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $open = $menu.Items.Add('Open settings')
@@ -408,9 +477,13 @@ Set-ProgramIcon
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 2000
-$iconTries = 0
+$script:iconTries = 0
 $timer.Add_Tick({
-  if ($iconTries -lt 5) { $script:iconTries++; Set-ProgramIcon }
+  if ($script:iconTries -lt 4) {
+    $script:iconTries++
+    Set-ProgramIcon
+    if ($script:windows10 -and -not $script:popup) { Update-TrayIcon }
+  }
   if (-not (Test-OurServer $ServerPid)) { Close-App }
 })
 $timer.Start()

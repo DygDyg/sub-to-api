@@ -94,14 +94,33 @@ function startTray(port) {
   const script = isSea()
     ? join(dirname(process.execPath), 'tray.ps1')
     : join(dirname(fileURLToPath(import.meta.url)), '../scripts/tray.ps1')
-  if (!existsSync(script)) return undefined
   const logDir = APP_DIR
   mkdirSync(logDir, { recursive: true })
-  const log = openSync(join(logDir, 'tray.log'), 'a')
-  return spawn('powershell.exe', [
-    '-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', script,
+  const logPath = join(logDir, 'tray.log')
+  if (!existsSync(script)) {
+    appendFileSync(logPath, `${new Date().toISOString()} tray script not found: ${script}\n`)
+    return undefined
+  }
+  const powershell = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const executable = existsSync(powershell) ? powershell : 'powershell.exe'
+  appendFileSync(logPath, `${new Date().toISOString()} spawning tray ${script}\n`)
+  const log = openSync(logPath, 'a')
+  // Do not create the process hidden. On Windows 10 the shell ignores a tray icon
+  // from a process started with SW_HIDE or -WindowStyle Hidden. tray.ps1 hides its
+  // console after the icon is registered.
+  const tray = spawn(executable, [
+    '-NoProfile', '-STA', '-WindowStyle', 'Minimized', '-ExecutionPolicy', 'Bypass', '-File', script,
     '-Port', String(port), '-ServerPid', String(process.pid),
-  ], { windowsHide: true, stdio: ['ignore', log, log] })
+  ], { windowsHide: false, stdio: ['ignore', log, log] })
+  tray.on('error', (error) => {
+    try { appendFileSync(logPath, `${new Date().toISOString()} tray spawn failed: ${error.message}\n`) } catch { /* log is best-effort */ }
+  })
+  tray.on('exit', (code) => {
+    if (code) {
+      try { appendFileSync(logPath, `${new Date().toISOString()} tray exited ${code}\n`) } catch { /* log is best-effort */ }
+    }
+  })
+  return tray
 }
 
 main().catch((error) => {
