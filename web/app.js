@@ -21,18 +21,26 @@ document.querySelector('#refresh').onclick = () => {
   if (document.querySelector('#tab-models').classList.contains('active')) loadCatalog(true)
 }
 const tabNav = document.querySelector('nav.tabs')
-document.querySelectorAll('[data-tab]').forEach((button) => {
-  button.onclick = () => showTab(button.dataset.tab)
-})
+const savedTab = localStorage.getItem('tab')
+localStorage.removeItem('tab')
+if (!location.hash && tabNames[savedTab]) history.replaceState(null, '', `${location.pathname}${location.search}#${savedTab}`)
 window.addEventListener('wheel', (event) => {
   if (tabNav.scrollWidth <= tabNav.clientWidth) return
   if (!event.target.closest('.sidebar')) return
   tabNav.scrollLeft += event.deltaY || event.deltaX
   event.preventDefault()
 }, { passive: false })
-showTab(localStorage.getItem('tab') || 'home')
+window.addEventListener('hashchange', () => showTab(tabFromHash()))
+showTab(tabFromHash())
+
+function tabFromHash() {
+  const name = decodeURIComponent(location.hash.slice(1))
+  return tabNames[name] ? name : 'home'
+}
 
 function showTab(name) {
+  if (!tabNames[name]) name = 'home'
+  if (location.hash !== `#${name}`) history.replaceState(null, '', `${location.pathname}${location.search}#${name}`)
   document.querySelectorAll('[data-tab]').forEach((button) => {
     const selected = button.dataset.tab === name
     button.setAttribute('aria-selected', String(selected))
@@ -41,7 +49,6 @@ function showTab(name) {
   document.querySelector('#crumb').textContent = tabNames[name] || name
   document.querySelector(`[data-tab="${name}"]`)?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
   document.querySelectorAll('.tab').forEach((tab) => tab.classList.toggle('active', tab.id === `tab-${name}`))
-  localStorage.setItem('tab', name)
   journalWatch = name === 'journal'
   if (!journalWatch) setPending(0)
   if (name === 'models') loadCatalog(false)
@@ -72,6 +79,10 @@ async function load({ refreshUsage = false } = {}) {
   setLink('#link-images', `${base}/images/generations`)
   setLink('#link-videos', `${base}/videos`)
   setLink('#link-usage', `${origin}/api/usage`)
+  setLink('#docs-settings', settingsPageLink(location.origin, overview.settings.settingsKey))
+  document.querySelector('#docs-settings-note').textContent = overview.settings.settingsKey
+    ? 'Добавьте к адресу страницы параметр settings и ключ. Ссылка уже собрана. Из интернета замените хост на внешний адрес и оставьте ?settings=.'
+    : 'Сначала задайте ключ настроек. Затем откройте страницу как адрес/?settings=ключ.'
   document.querySelector('#curl-example').textContent = curlExample(base, overview.settings.apiKeys?.[0]?.key || overview.settings.apiKey)
   document.querySelector('#port').value = overview.settings.port
   document.querySelector('#exposure').value = overview.settings.exposure || 'localhost'
@@ -1158,6 +1169,22 @@ function limitCell(windows) {
   }).join(' · ')
 }
 
+function rememberSettingsQuery() {
+  const params = new URLSearchParams(location.search)
+  const key = params.get('settings')
+  if (!key) return
+  sessionStorage.setItem('settingsKey', key)
+  params.delete('settings')
+  const query = params.toString()
+  history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`)
+}
+
+function settingsPageLink(origin, key) {
+  const url = new URL('/', origin)
+  if (key) url.searchParams.set('settings', key)
+  return url.toString()
+}
+
 function setLink(selector, href) {
   const link = document.querySelector(selector)
   link.href = href
@@ -1217,6 +1244,7 @@ document.addEventListener('visibilitychange', () => {
 })
 setInterval(tickSideResets, 60 * 1000)
 setInterval(() => { if (journalWatch && !document.hidden) refreshJournal() }, 4000)
+rememberSettingsQuery()
 load().catch((error) => {
   const status = document.querySelector('#port-status')
   if (status) status.textContent = error.message

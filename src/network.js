@@ -98,6 +98,12 @@ export function isLoopback(address) {
   return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost'
 }
 
+export function isInternetAddress(address) {
+  const ip = bareAddress(address)
+  if (!ip) return false
+  return !isLoopback(ip) && !isPrivate(ip)
+}
+
 export function isPrivate(address) {
   const ip = bareAddress(address).toLowerCase()
   if (isLoopback(ip)) return true

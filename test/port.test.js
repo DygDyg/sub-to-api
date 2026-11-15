@@ -4,8 +4,8 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
-import { createAppServer } from '../src/http/server.js'
-import { apiKeyRequired, canReachSettings, settingsKeyMustBeSet, settingsKeyRequired } from '../src/network.js'
+import { QUIET_HOLD_MS, createAppServer } from '../src/http/server.js'
+import { apiKeyRequired, canReachSettings, isInternetAddress, settingsKeyMustBeSet, settingsKeyRequired } from '../src/network.js'
 import { Store } from '../src/storage/store.js'
 
 test('settings exposure matches network zones and keeps the legacy switch', () => {
@@ -132,5 +132,107 @@ test('port changes reject occupied ports, accept same port and preserve effectiv
   } finally {
     server.closeAllConnections()
     await Promise.all([new Promise(resolve => server.close(resolve)), new Promise(resolve => occupied.close(resolve))])
+  }
+})
+
+test('internet probes stay silent while lan and localhost still answer', async () => {
+  assert.equal(isInternetAddress('8.8.8.8'), true)
+  assert.equal(isInternetAddress('::ffff:8.8.8.8'), true)
+  assert.equal(isInternetAddress('192.168.1.20'), false)
+  assert.equal(isInternetAddress('::ffff:192.168.1.150'), false)
+  assert.equal(isInternetAddress('127.0.0.1'), false)
+  assert.equal(isInternetAddress('::1'), false)
+  assert.ok(QUIET_HOLD_MS >= 20_000 && QUIET_HOLD_MS <= 30_000)
+
+  const state = {
+    settings: {
+      port: 47823,
+      exposure: 'internet',
+      apiKeyScope: 'internet',
+      apiKey: 'secret',
+      apiKeys: [{ id: 'a', label: 'Дом', key: 'secret' }],
+      settingsExposure: 'lan',
+      settingsKey: 'door',
+    },
+  }
+  const store = { read: async () => state, update: async fn => fn(state) }
+  const runtime = { host: '0.0.0.0', port: 0, exposure: 'internet', settingsExposure: 'lan', settingsKey: 'door', quietMs: 80, quietLimit: 8 }
+  const server = createAppServer({ models: async () => ({ data: [{ id: 'm' }] }) }, store, runtime, {})
+  const hit = (remote, url, headers) => {
+    const socket = { remoteAddress: remote, destroyed: false, destroy() { this.destroyed = true }, once() {} }
+    const request = { url, method: 'GET', headers: headers ?? {}, socket, resume() {} }
+    const response = {
+      socket,
+      headersSent: false,
+      status: 0,
+      body: '',
+      writeHead(status) { this.headersSent = true; this.status = status },
+      end(body) { this.body = body ?? '' },
+      setHeader(name, value) { this.headerSet = true; this.headers = { ...this.headers, [String(name).toLowerCase()]: value } },
+    }
+    server.emit('request', request, response)
+    return { socket, response }
+  }
+  const flush = () => new Promise(resolve => setImmediate(resolve))
+  const probe = hit('8.8.8.8', '/')
+  const missing = hit('8.8.8.8', '/v1/models')
+  const wrong = hit('8.8.8.8', '/v1/models', { authorization: 'Bearer nope' })
+  const lan = hit('192.168.1.20', '/v1/models')
+  const authed = hit('1.1.1.1', '/v1/models', { authorization: 'Bearer secret' })
+  const opened = hit('8.8.8.8', '/?settings=door')
+  const wrongPage = hit('8.8.8.8', '/?settings=nope')
+  await flush()
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.equal(probe.response.headersSent, false)
+  assert.equal(probe.response.headerSet, undefined)
+  assert.equal(probe.socket.destroyed, false)
+  assert.equal(missing.response.headersSent, false)
+  assert.equal(missing.response.headerSet, undefined)
+  assert.equal(wrong.response.headersSent, false)
+  assert.equal(wrong.response.headerSet, undefined)
+  assert.equal(lan.response.status, 200)
+  assert.equal(authed.response.status, 200)
+  assert.equal(opened.response.status, 200)
+  assert.match(opened.response.headers?.['set-cookie'] ?? '', /^settings=door;/)
+  assert.equal(wrongPage.response.headersSent, false)
+  assert.equal(wrongPage.response.headerSet, undefined)
+  const withCookie = hit('8.8.8.8', '/app.js', { cookie: 'settings=door' })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.equal(withCookie.response.status, 200)
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.equal(probe.socket.destroyed, true)
+  assert.equal(missing.socket.destroyed, true)
+  assert.equal(probe.response.headersSent, false)
+
+  const limited = createAppServer({ models: async () => ({ data: [] }) }, store, { ...runtime, quietMs: 5_000, quietLimit: 1 }, {})
+  const open = {
+    remoteAddress: '8.8.8.8',
+    destroyed: false,
+    destroy() { this.destroyed = true },
+    once() {},
+  }
+  const held = { url: '/api/overview', method: 'GET', headers: {}, socket: open, resume() {} }
+  const heldResponse = { socket: open, headersSent: false, writeHead() { this.headersSent = true }, end() {}, setHeader() {} }
+  limited.emit('request', held, heldResponse)
+  const dropped = { remoteAddress: '9.9.9.9', destroyed: false, destroy() { this.destroyed = true }, once() {} }
+  const droppedResponse = { socket: dropped, headersSent: false, writeHead() { this.headersSent = true }, end() {}, setHeader() { this.headerSet = true } }
+  limited.emit('request', { url: '/', method: 'GET', headers: {}, socket: dropped, resume() {} }, droppedResponse)
+  assert.equal(open.destroyed, false)
+  assert.equal(heldResponse.headersSent, false)
+  assert.equal(dropped.destroyed, true)
+  assert.equal(droppedResponse.headersSent, false)
+  assert.equal(droppedResponse.headerSet, undefined)
+
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const page = await fetch(`http://127.0.0.1:${server.address().port}/`, { signal: AbortSignal.timeout(2000) })
+    assert.equal(page.status, 200)
+    assert.match(await page.text(), /SubToAPI/)
+    const models = await fetch(`http://127.0.0.1:${server.address().port}/v1/models`, { signal: AbortSignal.timeout(2000) })
+    assert.equal(models.status, 200)
+  } finally {
+    server.closeAllConnections()
+    limited.closeAllConnections()
+    await Promise.all([new Promise(resolve => server.close(resolve)), new Promise(resolve => limited.close(resolve))])
   }
 })

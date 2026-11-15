@@ -6,23 +6,68 @@ import { fileURLToPath } from 'node:url'
 import { isSea, getAsset } from 'node:sea'
 import { chatCompletionToCanonical, collectChatCompletion, writeChatStream } from '../openai/translate.js'
 import { APP_VERSION } from '../version.js'
-import { API_KEY_SCOPES, allowedByExposure, apiKeyRequired, apiKeyScopeOf, apiKeysOf, canReachSettings, hostFor, lanAddresses, normalizeExposure, normalizeSettingsKeyScope, settingsExposureOf, settingsKeyMustBeSet, settingsKeyRequired, widerExposure } from '../network.js'
+import { API_KEY_SCOPES, allowedByExposure, apiKeyRequired, apiKeyScopeOf, apiKeysOf, canReachSettings, hostFor, isInternetAddress, lanAddresses, normalizeExposure, normalizeSettingsKeyScope, settingsExposureOf, settingsKeyMustBeSet, settingsKeyRequired, widerExposure } from '../network.js'
+
+export const QUIET_HOLD_MS = 25_000
+export const QUIET_HOLD_LIMIT = 32
 
 /**
  * @param {import('../gateway/service.js').GatewayService} service
  * @param {import('../storage/store.js').Store} store
  */
 export function createAppServer(service, store, runtime = { host: '127.0.0.1', port: 8787, configuredPort: 8787 }, hooks = {}) {
+  let quietCount = 0
+  const stayQuiet = (request) => {
+    request.resume?.()
+    const socket = request.socket
+    if (!socket || socket.destroyed) return
+    const limit = runtime.quietLimit ?? QUIET_HOLD_LIMIT
+    if (quietCount >= limit) {
+      socket.destroy()
+      return
+    }
+    quietCount += 1
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      quietCount -= 1
+    }
+    const timer = setTimeout(() => {
+      release()
+      if (!socket.destroyed) socket.destroy()
+    }, runtime.quietMs ?? QUIET_HOLD_MS)
+    timer.unref?.()
+    socket.once?.('close', () => {
+      clearTimeout(timer)
+      release()
+    })
+  }
+
   return createServer(async (request, response) => {
+    let internetApi = false
     try {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
       const remote = request.socket.remoteAddress
+      const internet = isInternetAddress(remote)
       const admin = isAdminPath(url.pathname)
-      if (admin && !canReachSettings(remote, runtime)) {
+      const settingsOk = settingsAuthorized(request, runtime, url)
+      if (internet && !(admin && settingsOk)) {
+        if (!url.pathname.startsWith('/v1/') || !allowedByExposure(remote, runtime.exposure)) return stayQuiet(request)
+        try {
+          if (!authorizeApi(request, (await store.read()).settings).ok) return stayQuiet(request)
+        } catch {
+          return stayQuiet(request)
+        }
+        internetApi = true
+      }
+      if (settingsOk) rememberSettingsKey(response, url)
+      if (admin && !canReachSettings(remote, runtime) && !settingsOk) {
+        if (internet) return stayQuiet(request)
         return send(response, 403, { error: { message: settingsForbiddenMessage(runtime) } })
       }
-      if (admin && url.pathname.startsWith('/api/') && settingsKeyRequired(remote, runtime.settingsKeyScope) && !settingsAuthorized(request, runtime)) {
-        const given = request.headers['x-settings-key']
+      if (admin && url.pathname.startsWith('/api/') && settingsKeyRequired(remote, runtime.settingsKeyScope) && !settingsOk) {
+        const given = presentedSettingsKey(request, url)
         const message = given ? 'Неверный ключ настроек' : 'Нужен ключ настроек'
         return send(response, 401, { error: { message, code: 'settings_auth' } })
       }
@@ -38,11 +83,12 @@ export function createAppServer(service, store, runtime = { host: '127.0.0.1', p
         return
       }
       if (url.pathname.startsWith('/v1/')) {
-        await handleOpenAI(service, store, url, request, response)
+        await handleOpenAI(service, store, url, request, response, internet ? () => stayQuiet(request) : undefined)
         return
       }
       send(response, 404, { error: { message: 'Not found' } })
     } catch (error) {
+      if (!internetApi && isInternetAddress(request.socket?.remoteAddress)) return stayQuiet(request)
       send(response, error.status ?? 500, { error: { message: error instanceof Error ? error.message : String(error), code: error.code } })
     }
   })
@@ -171,10 +217,11 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
   send(response, 404, { error: { message: 'Unknown admin endpoint' } })
 }
 
-async function handleOpenAI(service, store, url, request, response) {
+async function handleOpenAI(service, store, url, request, response, onUnauthorized) {
   const state = await store.read()
   const auth = authorizeApi(request, state.settings)
   if (!auth.ok) {
+    if (onUnauthorized) return onUnauthorized()
     response.setHeader('www-authenticate', 'Bearer')
     return send(response, 401, { error: { message: 'Invalid API key', type: 'authentication_error' } })
   }
@@ -213,10 +260,32 @@ function apiForbiddenMessage(exposure) {
   return 'Доступ разрешён только из локальной сети'
 }
 
-function settingsAuthorized(request, runtime) {
-  const given = request.headers['x-settings-key']
-  const value = Array.isArray(given) ? given[0] : given
-  return keyMatches(runtime.settingsKey, value)
+function settingsAuthorized(request, runtime, url) {
+  return keyMatches(runtime.settingsKey, presentedSettingsKey(request, url))
+}
+
+function presentedSettingsKey(request, url) {
+  const header = request.headers['x-settings-key']
+  const fromHeader = Array.isArray(header) ? header[0] : header
+  if (fromHeader) return String(fromHeader)
+  const fromQuery = url?.searchParams?.get('settings')
+  if (fromQuery) return fromQuery
+  return cookieValue(request, 'settings')
+}
+
+function cookieValue(request, name) {
+  const raw = request.headers.cookie ?? ''
+  for (const part of String(raw).split(';')) {
+    const [key, ...rest] = part.trim().split('=')
+    if (key === name) return decodeURIComponent(rest.join('='))
+  }
+  return ''
+}
+
+function rememberSettingsKey(response, url) {
+  const query = url.searchParams.get('settings')
+  if (!query) return
+  response.setHeader('set-cookie', `settings=${encodeURIComponent(query)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`)
 }
 
 function keyMatches(expected, given) {
