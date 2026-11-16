@@ -9,6 +9,7 @@ import { APP_VERSION } from '../version.js'
 import { complexityOf, normalizeComplexity } from '../complexity.js'
 import { API_KEY_SCOPES, allowedByExposure, apiKeyRequired, apiKeyScopeOf, apiKeysOf, canReachSettings, hostFor, isInternetAddress, lanAddresses, normalizeExposure, normalizeSettingsKeyScope, settingsExposureOf, settingsKeyMustBeSet, settingsKeyRequired, widerExposure } from '../network.js'
 import { DIRECT, normalizeProxyValue, testProxy } from '../proxy.js'
+import { faviconSite, loadFavicon } from './favicon.js'
 
 export const QUIET_HOLD_MS = 25_000
 export const QUIET_HOLD_LIMIT = 32
@@ -207,6 +208,8 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
   if (request.method === 'GET' && url.pathname === '/api/custom-providers') return send(response, 200, await service.customProviders())
   if (request.method === 'POST' && url.pathname === '/api/custom-providers/test') return send(response, 200, await service.testCustomProvider(await readJson(request)))
   if (request.method === 'POST' && url.pathname === '/api/custom-providers') return send(response, 200, await service.saveCustomProvider(await readJson(request)))
+  const favicon = /^\/api\/providers\/([a-z0-9_-]+)\/favicon$/.exec(url.pathname)
+  if (favicon && request.method === 'GET') return serveProviderFavicon(service, favicon[1], response)
   const customProvider = /^\/api\/custom-providers\/([a-z0-9_-]+)$/.exec(url.pathname)
   if (customProvider && request.method === 'DELETE') return send(response, 200, await service.deleteCustomProvider(customProvider[1]))
   if (request.method === 'GET' && url.pathname === '/api/model-tiers') return send(response, 200, await service.modelTiers(request.signal))
@@ -457,6 +460,20 @@ function normalizeApiKeys(input) {
     keys.push({ id, label, key })
   }
   return keys
+}
+
+async function serveProviderFavicon(service, id, response) {
+  const state = await service.store.read()
+  const config = (state.settings.customProviders ?? []).find((item) => item.id === id)
+  const site = faviconSite(config?.baseUrl)
+  if (!site) return send(response, 404, { error: { message: 'Нет сайта для иконки' } })
+  try {
+    const icon = await loadFavicon(site)
+    response.writeHead(200, { 'content-type': icon.type, 'cache-control': 'private, max-age=86400' })
+    response.end(icon.bytes)
+  } catch {
+    send(response, 404, { error: { message: 'Иконка недоступна' } })
+  }
 }
 
 async function serveStatic(name, response) {

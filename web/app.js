@@ -381,24 +381,9 @@ function providerMark(provider, label = provider) {
   const glyph = { codex: 'O', claude: 'A', grok: 'X', copilot: 'C', antigravity: 'G' }[id] ?? 'API'
   const builtInLogo = ['codex', 'claude', 'grok', 'copilot', 'antigravity'].includes(id) ? `/providers/${id}.png` : ''
   let favicon = builtInLogo ? `<img src="${builtInLogo}" alt="" aria-hidden="true">` : ''
-  if (!favicon && custom?.baseUrl) {
-    try {
-      const domain = providerSiteDomain(custom.baseUrl)
-      if (domain) favicon = `<img src="${escape(`https://www.google.com/s2/favicons?sz=128&domain=${encodeURIComponent(domain)}`)}" alt="" aria-hidden="true">`
-    } catch { /* конфигурация уже проверена на сервере; оставляем заглушку */ }
-  }
+  if (!favicon && custom?.baseUrl) favicon = `<img src="/api/providers/${encodeURIComponent(id)}/favicon" alt="" aria-hidden="true">`
   const title = custom?.label || label || provider || 'Провайдер'
   return `<span class="provider-mark ${custom ? 'custom' : escape(id)}${builtInLogo ? ' has-logo' : ''}" title="${escape(title)}" aria-label="${escape(title)}"><b>${glyph}</b>${favicon}</span>`
-}
-
-/** Хост сайта, не путь API. Префикс api. снимается, только если остаётся домен с точкой. */
-function providerSiteDomain(baseUrl) {
-  const host = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '')
-  if (host.startsWith('api.')) {
-    const root = host.slice(4)
-    if (root.includes('.')) return root
-  }
-  return host
 }
 
 function providerOfModel(model) {
