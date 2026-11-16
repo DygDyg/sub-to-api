@@ -219,6 +219,11 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
   const pool = /^\/api\/pools\/([^/]+)$/.exec(url.pathname)
   if (pool && request.method === 'DELETE') return send(response, 200, await service.deletePool(decodeURIComponent(pool[1])))
   if (request.method === 'GET' && url.pathname === '/api/catalog') return send(response, 200, await service.catalog(request.signal, url.searchParams.get('refresh') === '1'))
+  const providerState = /^\/api\/providers\/([a-z0-9_-]+)\/enabled$/.exec(url.pathname)
+  if (providerState && request.method === 'POST') {
+    const body = await readJson(request)
+    return send(response, 200, await service.setProviderEnabled(providerState[1], body.enabled))
+  }
   const models = /^\/api\/providers\/([a-z0-9_-]+)\/models$/.exec(url.pathname)
   if (models && request.method === 'GET') return send(response, 200, { data: await service.providerModels(models[1], request.signal, url.searchParams.get('refresh') === '1') })
   if (models && request.method === 'POST') return send(response, 200, await service.setProviderModels(models[1], (await readJson(request)).ids))

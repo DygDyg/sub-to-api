@@ -2,6 +2,7 @@ import { providerError } from '../auth/oauth.js'
 import { createProviderFetch } from '../proxy.js'
 import { claudeRequest, streamClaude } from './claude-translate.js'
 import { PROVIDER_IDS } from './types.js'
+import { customUsage, customUsageMode } from './custom-usage.js'
 
 export const CUSTOM_PROTOCOLS = ['openai', 'anthropic']
 export const CUSTOM_ID = /^[a-z0-9][a-z0-9_-]{1,31}$/
@@ -44,7 +45,8 @@ export function normalizeCustomProvider(input, previous) {
     apiKey,
     headers,
     models: [...new Set(models)],
-    enabled: input?.enabled !== false,
+    usageMode: input?.usageMode === undefined ? customUsageMode(previous?.usageMode) : customUsageMode(input.usageMode),
+    enabled: input?.enabled === undefined ? previous?.enabled !== false : input.enabled !== false,
   }
 }
 
@@ -132,8 +134,8 @@ export class CustomApiProvider {
     })
   }
 
-  async usage() {
-    return { supported: false, windows: [], fetchedAt: Date.now() }
+  async usage(_account, signal) {
+    return customUsage(this, this.config.usageMode, signal)
   }
 
   async *stream(request) {

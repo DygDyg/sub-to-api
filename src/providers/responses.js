@@ -24,7 +24,7 @@ const DEFAULT_CODEX_INSTRUCTIONS = 'You are a helpful coding assistant.'
  * client sent encrypted items, rides ahead of the matching call and is
  * deduped by array reference so parallel calls of one response replay once.
  * @param {import('./types.js').CanonicalRequest} request
- * @param {{ defaultInstructions?: string }} [options]
+ * @param {{ defaultInstructions?: string, replayReasoning?: boolean }} [options]
  */
 export function toResponsesInput(request, options = {}) {
   const systemTexts = request.messages.filter((message) => message.role === 'system').map((message) => message.content).filter(Boolean)
@@ -49,14 +49,13 @@ export function toResponsesInput(request, options = {}) {
     if (message.content) content.push({ type: message.role === 'assistant' ? 'output_text' : 'input_text', text: message.content })
     for (const call of message.toolCalls ?? []) {
       flush()
-      const replay = message.reasoningByCallId?.[call.id] ?? reasoningFor(call.id)
+      const replay = options.replayReasoning === false ? undefined : (message.reasoningByCallId?.[call.id] ?? reasoningFor(call.id))
       if (replay && replay !== lastReplay) {
         for (const item of replay) {
           input.push({
             type: 'reasoning',
             ...(item.id ? { id: item.id } : {}),
             ...(item.summary ? { summary: item.summary } : {}),
-            ...(item.status ? { status: item.status } : {}),
             encrypted_content: item.encrypted_content,
           })
         }
@@ -86,7 +85,7 @@ export function toResponsesTools(tools, options = {}) {
 
 /**
  * @param {import('./types.js').CanonicalRequest} request
- * @param {{ strict?: false, defaultInstructions?: string, includeEncryptedReasoning?: boolean }} [options]
+ * @param {{ strict?: false, defaultInstructions?: string, includeEncryptedReasoning?: boolean, replayReasoning?: boolean }} [options]
  */
 export function responsesBody(request, options = {}) {
   const resolved = toResponsesInput(request, options)
@@ -191,7 +190,6 @@ export class ResponsesStreamTranslator {
       this.#pendingReasoning.push({
         ...(item.id ? { id: item.id } : {}),
         ...(Array.isArray(item.summary) ? { summary: item.summary } : {}),
-        ...(item.status ? { status: item.status } : {}),
         encrypted_content: item.encrypted_content,
       })
       const target = [...this.#calls.values()].at(-1)

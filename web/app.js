@@ -52,6 +52,7 @@ function showTab(name) {
   document.querySelectorAll('.tab').forEach((tab) => tab.classList.toggle('active', tab.id === `tab-${name}`))
   journalWatch = name === 'journal'
   if (!journalWatch) setPending(0)
+  if (name === 'settings' && appReady) load().catch(() => undefined)
   if (name === 'models') loadCatalog(false)
   if (name === 'pools') loadPools()
   if (name === 'stats') loadStats()
@@ -233,7 +234,7 @@ function row(request) {
 
 function renderProvider(provider, opened) {
   const card = document.createElement('details')
-  card.className = 'card provider shadow-sm'
+  card.className = `card provider shadow-sm${provider.enabled === false ? ' provider-disabled' : ''}`
   card.dataset.id = provider.id
   card.open = opened
   card.ontoggle = () => localStorage.setItem('provider-open', JSON.stringify([...providers.querySelectorAll('details[open]')].map((item) => item.dataset.id)))
@@ -242,7 +243,7 @@ function renderProvider(provider, opened) {
     ? provider.accounts.map((account) => `<li class="list-group-item d-flex justify-content-between align-items-center gap-2"><span>${escape(account.label ?? account.key)}${account.isDefault ? ' · основной' : ''}</span><button type="button" class="btn btn-outline-danger btn-sm" data-logout="${escape(account.key)}">Выйти</button></li>`).join('')
     : '<li class="list-group-item text-body-secondary">Нет аккаунтов</li>'
   card.innerHTML = `
-    <summary class="card-header d-flex align-items-center gap-2"><div class="d-flex flex-grow-1 justify-content-between align-items-baseline gap-2 min-w-0"><h3 class="h6 mb-0">${providerMark(provider.id, provider.label)}${escape(provider.label)}</h3><p class="text-body-secondary small mb-0 text-truncate" data-summary>${provider.loginKind}</p></div></summary>
+    <summary class="card-header d-flex align-items-center gap-2"><div class="d-flex flex-grow-1 justify-content-between align-items-center gap-3 min-w-0"><div class="min-w-0"><h3 class="h6 mb-0">${providerMark(provider.id, provider.label)}${escape(provider.label)}</h3><p class="text-body-secondary small mb-0 text-truncate" data-summary>${provider.enabled === false ? 'отключён' : provider.loginKind}</p></div><label class="form-check form-switch switch-end d-flex align-items-center gap-2 mb-0 flex-none" data-provider-toggle><input class="form-check-input" type="checkbox" role="switch" aria-label="Включить ${escape(provider.label)}" ${provider.enabled === false ? '' : 'checked'}><span class="small">Включён</span></label></div></summary>
     <div class="card-body vstack gap-3">
       <ul class="list-group">${accounts}</ul>
       <div data-usage class="vstack gap-3"><p class="text-body-secondary mb-0">Квота загружается…</p></div>
@@ -257,6 +258,21 @@ function renderProvider(provider, opened) {
       </form>
     </div>`
   const form = card.querySelector('form')
+  const toggle = card.querySelector('[data-provider-toggle]')
+  toggle.onclick = (event) => event.stopPropagation()
+  toggle.querySelector('input').onchange = async (event) => {
+    const input = event.currentTarget
+    const enabled = input.checked
+    input.disabled = true
+    try {
+      await api(`/api/providers/${provider.id}/enabled`, { method: 'POST', body: JSON.stringify({ enabled }) })
+      await load()
+    } catch (error) {
+      input.checked = !enabled
+      input.disabled = false
+      card.querySelector('[data-status]').textContent = error.message
+    }
+  }
   if (provider.custom) {
     card.querySelectorAll('[data-logout]').forEach((button) => button.remove())
     card.querySelector('[data-custom-edit]').onclick = () => openCustomForm(customProviderList.find((item) => item.id === provider.id))
@@ -367,12 +383,22 @@ function providerMark(provider, label = provider) {
   let favicon = builtInLogo ? `<img src="${builtInLogo}" alt="" aria-hidden="true">` : ''
   if (!favicon && custom?.baseUrl) {
     try {
-      const url = new URL(custom.baseUrl)
-      favicon = `<img src="${escape(new URL('/favicon.ico', url).href)}" alt="" aria-hidden="true">`
+      const domain = providerSiteDomain(custom.baseUrl)
+      if (domain) favicon = `<img src="${escape(`https://www.google.com/s2/favicons?sz=128&domain=${encodeURIComponent(domain)}`)}" alt="" aria-hidden="true">`
     } catch { /* конфигурация уже проверена на сервере; оставляем заглушку */ }
   }
   const title = custom?.label || label || provider || 'Провайдер'
   return `<span class="provider-mark ${custom ? 'custom' : escape(id)}${builtInLogo ? ' has-logo' : ''}" title="${escape(title)}" aria-label="${escape(title)}"><b>${glyph}</b>${favicon}</span>`
+}
+
+/** Хост сайта, не путь API. Префикс api. снимается, только если остаётся домен с точкой. */
+function providerSiteDomain(baseUrl) {
+  const host = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '')
+  if (host.startsWith('api.')) {
+    const root = host.slice(4)
+    if (root.includes('.')) return root
+  }
+  return host
 }
 
 function providerOfModel(model) {
@@ -506,7 +532,7 @@ async function renderSideLimits(usageRequest) {
   const payload = await usageRequest
   scheduleLimitsRefresh()
   const rows = (payload.providers ?? []).filter((provider) => provider.usage?.windows?.length)
-  const signature = rows.map((provider) => `${provider.id}:${provider.usage.windows.map((item) => `${item.kind}:${item.scope ?? ''}:${item.usedPercent}:${item.resetsAt ?? ''}`).join(',')}`).join('|')
+  const signature = rows.map((provider) => `${provider.id}:${provider.usage.windows.map((item) => `${item.kind}:${item.scope ?? ''}:${item.usedPercent}:${item.resetsAt ?? ''}:${item.used ?? ''}:${item.limit ?? ''}:${item.remaining ?? ''}`).join(',')}`).join('|')
   if (!rows.length) {
     limitsSignature = ''
     sideLimits.hidden = true
@@ -542,7 +568,7 @@ function sideMeter(item) {
   const meter = document.createElement('div')
   meter.className = 'side-meter'
   const caption = document.createElement('span')
-  caption.textContent = sideWindowLabel(item)
+  caption.textContent = usageAmount(item) || sideWindowLabel(item)
   const reset = document.createElement('span')
   reset.className = 'side-reset'
   if (item.resetsAt) {
@@ -561,7 +587,8 @@ function sideMeter(item) {
   fill.className = `progress-bar ${usageBar(item.usedPercent)}`
   fill.style.width = `${remaining}%`
   bar.append(fill)
-  meter.title = item.resetsAt ? `${rounded}% осталось. ${resetAbsolute(item.resetsAt)}` : `${rounded}% осталось`
+  const amount = usageAmount(item)
+  meter.title = [`${rounded}% осталось`, amount, item.resetsAt ? resetAbsolute(item.resetsAt) : ''].filter(Boolean).join('. ')
   meter.append(caption, reset, value, bar)
   return meter
 }
@@ -592,6 +619,16 @@ function sideWindowLabel(item) {
   return kind || 'Лимит'
 }
 
+function usageAmount(item) {
+  const limit = Number(item?.limit)
+  if (!Number.isFinite(limit) || limit <= 0) return ''
+  const rawRemaining = Number(item?.remaining)
+  const used = Number(item?.used)
+  const remaining = Number.isFinite(rawRemaining) ? rawRemaining : Number.isFinite(used) ? Math.max(0, limit - used) : NaN
+  if (!Number.isFinite(remaining)) return ''
+  return `${formatTokens(remaining)} из ${formatTokens(limit)} ${item.unit || ''}`.trim()
+}
+
 async function fillUsage(card, provider, usageRequest) {
   const payload = await usageRequest
   const usage = payload.providers?.find((item) => item.id === provider.id)?.usage
@@ -601,7 +638,9 @@ async function fillUsage(card, provider, usageRequest) {
   if (usage.windows?.length) {
     target.innerHTML = usage.windows.map((item) => {
       const remaining = Math.max(0, Math.min(100, 100 - item.usedPercent))
-      return `<div><div class="d-flex justify-content-between gap-2 small mb-1"><span class="text-body-secondary">${escape(windowLabel(item))}</span><strong${item.resetsAt ? ` title="${escape(resetAbsolute(item.resetsAt))}"` : ''}>${Math.round(remaining)}% осталось${resetText(item)}</strong></div><div class="progress" role="progressbar" aria-valuenow="${Math.round(remaining)}" aria-valuemin="0" aria-valuemax="100" style="height:8px"><div class="progress-bar ${usageBar(item.usedPercent)}" style="width:${remaining}%"></div></div></div>`
+      const amount = usageAmount(item)
+      const label = amount ? `${windowLabel(item)} · ${amount}` : windowLabel(item)
+      return `<div><div class="d-flex justify-content-between gap-2 small mb-1"><span class="text-body-secondary">${escape(label)}</span><strong${item.resetsAt ? ` title="${escape(resetAbsolute(item.resetsAt))}"` : ''}>${Math.round(remaining)}% осталось${resetText(item)}</strong></div><div class="progress" role="progressbar" aria-valuenow="${Math.round(remaining)}" aria-valuemin="0" aria-valuemax="100" style="height:8px"><div class="progress-bar ${usageBar(item.usedPercent)}" style="width:${remaining}%"></div></div></div>`
     }).join('')
   } else {
     target.innerHTML = `<p class="text-body-secondary mb-0">${escape(usage.error || 'Нет данных о квоте')}</p>`
@@ -1401,10 +1440,12 @@ function renderCustomProviders(list) {
 }
 
 let customOriginalId = ''
+let customUsageMode = ''
 
 function openCustomForm(provider) {
   document.querySelector('#custom-dialog').showModal()
   customOriginalId = provider?.id || ''
+  customUsageMode = provider?.usageMode || ''
   document.querySelector('#custom-label').value = provider?.label || ''
   document.querySelector('#custom-id').value = provider?.id || ''
   document.querySelector('#custom-protocol').value = provider?.protocol || 'openai'
@@ -1427,6 +1468,7 @@ function customPayload() {
     apiKey: document.querySelector('#custom-key').value.trim(),
     models: document.querySelector('#custom-models').value,
     headers: document.querySelector('#custom-headers').value.trim(),
+    usageMode: customUsageMode,
   }
 }
 
@@ -1445,9 +1487,14 @@ document.querySelector('#custom-test').onclick = async () => {
   status.textContent = 'Проверяю /models…'
   try {
     const result = await api('/api/custom-providers/test', { method: 'POST', body: JSON.stringify(customPayload()) })
+    customUsageMode = result.usageMode || ''
+    const window = result.usage?.windows?.[0]
+    const limits = customUsageMode
+      ? ` Лимиты: ${result.usageLabel || customUsageMode}${window ? `, ${usageAmount(window)}` : ''}.`
+      : ' Схема лимитов не найдена.'
     status.textContent = result.ok
-      ? `Доступно моделей: ${result.count}${result.models?.length ? ` (${result.models.slice(0, 8).join(', ')})` : ''} за ${result.ms} мс`
-      : `Не отвечает: ${result.error}`
+      ? `Доступно моделей: ${result.count}${result.models?.length ? ` (${result.models.slice(0, 8).join(', ')})` : ''} за ${result.ms} мс.${limits}`
+      : `Модели не отвечают: ${result.error}.${limits}`
   } catch (error) { status.textContent = error.message }
 }
 

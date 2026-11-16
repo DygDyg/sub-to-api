@@ -3,7 +3,10 @@ import test from 'node:test'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer } from 'node:http'
+import { once } from 'node:events'
 import { CustomApiProvider, anthropicBody, normalizeCustomProvider, streamOpenAI } from '../src/providers/custom.js'
+import { detectCustomUsage } from '../src/providers/custom-usage.js'
 import { Store } from '../src/storage/store.js'
 import { ProviderRegistry } from '../src/gateway/registry.js'
 import { GatewayService } from '../src/gateway/service.js'
@@ -28,6 +31,8 @@ test('normalizeCustomProvider validates and keeps the stored key when masked', (
   assert.deepEqual(config.headers, { 'HTTP-Referer': 'https://x' })
   const kept = normalizeCustomProvider({ ...config, apiKey: 'sk-s…cret' }, config)
   assert.equal(kept.apiKey, 'sk-secret')
+  const disabled = normalizeCustomProvider({ ...config, enabled: false }, config)
+  assert.equal(normalizeCustomProvider({ ...disabled, enabled: undefined }, disabled).enabled, false)
   assert.throws(() => normalizeCustomProvider({ id: 'claude', baseUrl: 'https://x' }), /занят/)
   assert.throws(() => normalizeCustomProvider({ id: 'ok', baseUrl: 'ftp://x' }), /http/)
 })
@@ -94,7 +99,7 @@ test('custom provider falls back to the manual list when discovery fails', async
 test('custom providers survive a settings roundtrip and route by id', async () => {
   const store = new Store(join(await mkdtemp(join(tmpdir(), 'custom-')), 'state.json'))
   const service = new GatewayService(store, new ProviderRegistry([]))
-  const saved = await service.saveCustomProvider({ id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-1', models: ['deepseek-chat'] })
+  const saved = await service.saveCustomProvider({ id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-1', models: ['deepseek-chat'], usageMode: 'anymodel' })
   assert.equal(saved.apiKey.includes('…'), true)
   await service.reloadCustom()
   const adapter = service.registry.get('deepseek')
@@ -105,6 +110,93 @@ test('custom providers survive a settings roundtrip and route by id', async () =
   assert.equal(overview.providers.some((provider) => provider.custom && provider.id === 'deepseek'), true)
   await service.deleteCustomProvider('deepseek')
   assert.throws(() => service.registry.get('deepseek'), /Unknown provider/)
+})
+
+test('Anymodel usage is detected, parsed and falls back from balance to key', async () => {
+  const calls = []
+  const provider = new CustomApiProvider(null, normalizeCustomProvider({ id: 'any', baseUrl: 'https://any.example/v1', apiKey: 'sk-secret', usageMode: 'anymodel' }), {
+    fetch: async (url, init) => {
+      calls.push({ url, authorization: init.headers.authorization })
+      if (url.endsWith('/balance')) return new Response('{}', { status: 404 })
+      return jsonResponse({ data: { name: 'test', token_limit: 100_000_000, used: 402_540, remaining: 99_597_460 } })
+    },
+  })
+  const detected = await detectCustomUsage(provider)
+  assert.equal(detected.mode, 'anymodel')
+  assert.deepEqual(calls.map((call) => call.url.split('/').at(-1)), ['balance', 'key'])
+  assert.equal(calls[0].authorization, 'Bearer sk-secret')
+  const window = detected.snapshot.windows[0]
+  assert.equal(window.limit, 100_000_000)
+  assert.equal(window.remaining, 99_597_460)
+  assert.equal(Math.round(window.usedPercent * 1000) / 1000, 0.403)
+
+  const unknown = new CustomApiProvider(null, normalizeCustomProvider({ id: 'unknown', baseUrl: 'https://unknown.example/v1' }), { fetch: async () => jsonResponse({ data: { balance: 10 } }) })
+  assert.equal((await detectCustomUsage(unknown)).mode, '')
+  assert.equal((await unknown.usage()).supported, false)
+})
+
+test('Neural API usage merges the dollar limit and cent usage into tokens', async () => {
+  const calls = []
+  const provider = new CustomApiProvider(null, normalizeCustomProvider({ id: 'neural', baseUrl: 'https://neural-api.ru/v1', apiKey: 'sk-secret' }), {
+    fetch: async (url) => {
+      calls.push(url)
+      if (url.endsWith('/balance') || url.endsWith('/key')) return new Response('{}', { status: 404 })
+      if (url.endsWith('/subscription')) return jsonResponse({ object: 'billing_subscription', soft_limit_usd: 70, hard_limit_usd: 70, system_hard_limit_usd: 70, access_until: 0 })
+      if (url.endsWith('/usage')) return jsonResponse({ object: 'list', total_usage: 250 })
+      return new Response('{}', { status: 404 })
+    },
+  })
+  const detected = await detectCustomUsage(provider)
+  assert.equal(detected.mode, 'neural')
+  assert.equal(detected.label, 'Neural API')
+  const window = detected.snapshot.windows[0]
+  assert.equal(window.limit, 35_000_000)
+  assert.equal(window.used, 1_250_000)
+  assert.equal(window.remaining, 33_750_000)
+  assert.equal(window.unit, 'токенов')
+
+  const fork = new CustomApiProvider(null, normalizeCustomProvider({ id: 'fork', baseUrl: 'https://fork.example/v1', usageMode: 'neural' }), {
+    fetch: async (url) => url.endsWith('/subscription')
+      ? jsonResponse({ soft_limit_usd: 10, hard_limit_usd: 12, system_hard_limit_usd: 12 })
+      : jsonResponse({ total_usage: 500 }),
+  })
+  const mixed = (await fork.usage()).windows[0]
+  assert.equal(mixed.remaining, 5_000_000)
+  assert.equal(mixed.used, 2_500_000)
+  assert.equal(mixed.limit, 7_500_000)
+  assert.ok(calls.some((url) => url.endsWith('/dashboard/billing/subscription')))
+})
+
+test('custom provider auto-detects and saves usage mode without exposing the key', async () => {
+  const authorizations = []
+  const server = createServer((request, response) => {
+    authorizations.push(request.headers.authorization)
+    response.setHeader('content-type', 'application/json')
+    if (request.url === '/v1/models') response.end(JSON.stringify({ data: [{ id: 'm1' }] }))
+    else if (request.url === '/v1/balance') response.end(JSON.stringify({ data: { token_limit: 1000, used: 250, remaining: 750 } }))
+    else { response.statusCode = 404; response.end('{}') }
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  try {
+    const address = server.address()
+    const store = new Store(join(await mkdtemp(join(tmpdir(), 'custom-usage-')), 'state.json'))
+    const service = new GatewayService(store, new ProviderRegistry([]))
+    const input = { id: 'metered', label: 'Metered', baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: 'sk-test-secret' }
+    const saved = await service.saveCustomProvider(input)
+    assert.equal(saved.usageMode, 'anymodel')
+    assert.equal(JSON.stringify(saved).includes('sk-test-secret'), false)
+    assert.equal((await service.usage('metered')).windows[0].remaining, 750)
+
+    const checked = await service.testCustomProvider({ ...input, originalId: 'metered' })
+    assert.equal(checked.ok, true)
+    assert.equal(checked.usageMode, 'anymodel')
+    assert.equal(checked.usage.windows[0].usedPercent, 25)
+    assert.equal(authorizations.every((value) => value === 'Bearer sk-test-secret'), true)
+  } finally {
+    server.close()
+    await once(server, 'close')
+  }
 })
 
 function jsonResponse(payload) {

@@ -7,6 +7,7 @@ import { buildStats, recordUsage } from '../stats.js'
 import { LAST_REQUEST_PATH } from '../storage/store.js'
 import { writeFile } from 'node:fs/promises'
 import { CustomApiProvider, normalizeCustomProvider, publicCustomProvider } from '../providers/custom.js'
+import { detectCustomUsage } from '../providers/custom-usage.js'
 import { fetchVia, proxyFor } from '../proxy.js'
 
 export class GatewayService {
@@ -30,7 +31,6 @@ export class GatewayService {
     const before = new Set(this.registry.custom.keys())
     const adapters = []
     for (const raw of state.settings.customProviders ?? []) {
-      if (raw.enabled === false) continue
       try {
         adapters.push(new CustomApiProvider(this.store, normalizeCustomProvider(raw, raw)))
       } catch { /* битая запись не должна ронять запуск */ }
@@ -50,12 +50,18 @@ export class GatewayService {
 
   /** @param {any} input */
   async saveCustomProvider(input) {
+    const current = await this.store.read()
+    const original = String(input?.originalId ?? input?.id ?? '').trim().toLowerCase()
+    const previous = (current.settings.customProviders ?? []).find((item) => item.id === original)
+    const config = normalizeCustomProvider(input, previous)
+    if (!config.usageMode) {
+      const adapter = this.#customAdapter(current.settings, config, input?.proxy)
+      config.usageMode = (await detectCustomUsage(adapter, AbortSignal.timeout(10_000))).mode
+    }
     let saved
     await this.store.update((state) => {
       const list = [...(state.settings.customProviders ?? [])]
-      const original = String(input?.originalId ?? input?.id ?? '').trim().toLowerCase()
       const index = list.findIndex((item) => item.id === original)
-      const config = normalizeCustomProvider(input, index >= 0 ? list[index] : undefined)
       if (list.some((item, at) => item.id === config.id && at !== index)) throw Object.assign(new Error(`Провайдер «${config.id}» уже есть`), { status: 409 })
       if (index >= 0) list[index] = config
       else list.push(config)
@@ -78,19 +84,28 @@ export class GatewayService {
     return { ok: true }
   }
 
-  /** Проверка своего провайдера: запрос /models без сохранения. @param {any} input */
+  #customAdapter(settings, config, proxy) {
+    const providerProxies = { ...settings.providerProxies, [config.id]: proxy ?? settings.providerProxies?.[config.id] ?? '' }
+    return new CustomApiProvider(this.store, config, { fetch: (url, init) => fetchVia(proxyFor({ ...settings, providerProxies }, config.id), url, init) })
+  }
+
+  /** Проверка своего провайдера: модели и автоопределение квоты без сохранения. @param {any} input */
   async testCustomProvider(input) {
     const state = await this.store.read()
     const previous = (state.settings.customProviders ?? []).find((item) => item.id === String(input?.originalId ?? input?.id ?? '').trim().toLowerCase())
     const config = normalizeCustomProvider(input, previous)
-    const adapter = new CustomApiProvider(this.store, config, { fetch: (url, init) => fetchVia(proxyFor({ ...state.settings, providerProxies: { ...state.settings.providerProxies, [config.id]: input?.proxy ?? state.settings.providerProxies?.[config.id] ?? '' } }, config.id), url, init) })
+    const adapter = this.#customAdapter(state.settings, config, input?.proxy)
     const started = Date.now()
-    try {
-      const models = await adapter.discoverModels(AbortSignal.timeout(20_000))
-      return { ok: true, count: models.length, models: models.slice(0, 50).map((model) => model.id), ms: Date.now() - started }
-    } catch (error) {
-      return { ok: false, error: error?.message ?? String(error), ms: Date.now() - started }
+    const [modelsResult, usageResult] = await Promise.allSettled([
+      adapter.discoverModels(AbortSignal.timeout(20_000)),
+      detectCustomUsage(adapter, AbortSignal.timeout(10_000)),
+    ])
+    const detected = usageResult.status === 'fulfilled' ? usageResult.value : { mode: '', label: '', snapshot: { supported: false, windows: [] } }
+    if (modelsResult.status === 'rejected') {
+      return { ok: false, error: modelsResult.reason?.message ?? String(modelsResult.reason), usageMode: detected.mode, usageLabel: detected.label, usage: detected.snapshot, ms: Date.now() - started }
     }
+    const models = modelsResult.value
+    return { ok: true, count: models.length, models: models.slice(0, 50).map((model) => model.id), usageMode: detected.mode, usageLabel: detected.label, usage: detected.snapshot, ms: Date.now() - started }
   }
 
   async overview() {
@@ -103,6 +118,7 @@ export class GatewayService {
         label: adapter.label,
         loginKind: adapter.loginKind,
         ...(adapter.custom ? { custom: true, protocol: adapter.protocol } : {}),
+        enabled: providerEnabled(state.settings, adapter.id),
         clientId: adapter.id === 'antigravity' ? state.settings.antigravityClientId : undefined,
         accounts,
       })
@@ -135,6 +151,27 @@ export class GatewayService {
     }
   }
 
+  /** Включает или выключает провайдера, не удаляя аккаунты и настройки. */
+  async setProviderEnabled(providerId, enabled) {
+    this.registry.get(providerId)
+    if (typeof enabled !== 'boolean') throw Object.assign(new Error('enabled должен быть true или false'), { status: 400 })
+    const state = await this.store.update((current) => {
+      const disabled = new Set(current.settings.disabledProviders ?? [])
+      if (enabled) disabled.delete(providerId)
+      else disabled.add(providerId)
+      current.settings.disabledProviders = [...disabled]
+      const custom = (current.settings.customProviders ?? []).find((item) => item.id === providerId)
+      if (custom) custom.enabled = enabled
+    })
+    if (!enabled) {
+      this.usageCache.delete(providerId)
+      this.poolSticky.forEach((member, key) => {
+        if (member.startsWith(`${providerId}/`)) this.poolSticky.delete(key)
+      })
+    }
+    return { id: providerId, enabled: providerEnabled(state.settings, providerId) }
+  }
+
   async journal() {
     return { requests: loggedRequests(await this.store.read()) }
   }
@@ -143,6 +180,15 @@ export class GatewayService {
     const state = await this.store.read()
     const usage = await this.usageAll(signal, false).catch(() => ({ providers: [] }))
     return buildStats(state.usageStats, usage.providers ?? [], { key })
+  }
+
+  async #enabledAdapter(providerId) {
+    const adapter = this.registry.get(providerId)
+    const settings = (await this.store.read()).settings
+    if (!providerEnabled(settings, providerId)) {
+      throw Object.assign(new Error(`Провайдер «${adapter.label}» отключён`), { status: 404, code: 'provider_disabled' })
+    }
+    return adapter
   }
 
   /** @param {string} provider @param {any} input */
@@ -199,7 +245,9 @@ export class GatewayService {
   /** @param {AbortSignal} [signal] @param {boolean} [refresh] */
   async usageAll(signal, refresh = false) {
     const providers = []
+    const settings = typeof this.store.read === 'function' ? (await this.store.read()).settings : {}
     for (const adapter of this.registry.list()) {
+      if (!providerEnabled(settings, adapter.id)) continue
       const accounts = await adapter.listAccounts().catch((error) => [{ key: 'error', label: error.message, isDefault: false }])
       if (!accounts.length) continue
       let usage
@@ -238,6 +286,7 @@ export class GatewayService {
     const settings = (await this.store.read()).settings
     const tiers = settings.modelTiers ?? {}
     for (const adapter of this.registry.list()) {
+      if (!providerEnabled(settings, adapter.id)) continue
       const enabled = settings.enabledModels?.[adapter.id]
       const discovered = await this.#cachedModels(adapter.id, 'chat', signal, refresh).catch(() => [])
       for (const model of discovered) {
@@ -299,10 +348,12 @@ export class GatewayService {
     const models = []
     const state = await this.store.read()
     for (const pool of state.pools ?? []) {
+      if (!pool.members.some((member) => providerEnabled(state.settings, member.split('/', 1)[0]))) continue
       models.push({ id: `pool/${pool.id}`, object: 'model', owned_by: 'pool', name: pool.id, description: pool.members.join(', ') })
     }
     const enabledModels = state.settings.enabledModels ?? {}
     for (const adapter of this.registry.list()) {
+      if (!providerEnabled(state.settings, adapter.id)) continue
       const discovered = await this.#cachedModels(adapter.id, 'chat', signal).catch(() => [])
       const enabled = enabledModels[adapter.id]
       for (const model of discovered) {
@@ -322,7 +373,9 @@ export class GatewayService {
 
   async #mediaModels(signal, capability) {
     const models = []
+    const settings = (await this.store.read()).settings
     for (const adapter of this.registry.list()) {
+      if (!providerEnabled(settings, adapter.id)) continue
       if (typeof adapter.listMediaModels !== 'function') continue
       const discovered = await this.#cachedModels(adapter.id, 'media', signal).catch(() => [])
       for (const model of discovered) {
@@ -338,7 +391,7 @@ export class GatewayService {
     if (!prompt) throw Object.assign(new Error('Нужен непустой prompt'), { status: 400 })
     const requested = String(body.model ?? '')
     const providerId = body.provider === 'grok' || requested.startsWith('grok/') || requested.startsWith('grok-') ? 'grok' : 'codex'
-    const provider = this.registry.get(providerId)
+    const provider = await this.#enabledAdapter(providerId)
     if (typeof provider.generateImage !== 'function') throw Object.assign(new Error('Провайдер не генерирует изображения'), { status: 400 })
     const model = requested.includes('/') ? requested.slice(requested.indexOf('/') + 1) : requested
     const payload = await provider.generateImage({ prompt, model, size: body.size, quality: body.quality }, signal)
@@ -352,15 +405,16 @@ export class GatewayService {
       throw Object.assign(new Error('duration должен быть от 1 до 15 секунд'), { status: 400 })
     }
     const requested = String(body.model ?? '')
-    const payload = await this.registry.get('grok').startVideo({
+    const provider = await this.#enabledAdapter('grok')
+    const payload = await provider.startVideo({
       prompt, model: requested.includes('/') ? requested.slice(requested.indexOf('/') + 1) : requested, duration: body.duration, aspectRatio: body.aspect_ratio, resolution: body.resolution, imageUrl: body.image_url,
     }, signal)
     if (!payload.request_id) throw Object.assign(new Error('Grok не вернул request_id'), { status: 502 })
     return { id: payload.request_id, object: 'video', status: 'queued', provider: 'grok' }
   }
 
-  videoStatus(id, signal) {
-    return this.registry.get('grok').videoStatus(id, signal)
+  async videoStatus(id, signal) {
+    return (await this.#enabledAdapter('grok')).videoStatus(id, signal)
   }
 
   /** Чат-модели с уровнями сложности и инструкция для ИИ. @param {AbortSignal} [signal] */
@@ -369,6 +423,7 @@ export class GatewayService {
     const tiers = state.settings.modelTiers ?? {}
     const models = []
     for (const adapter of this.registry.list()) {
+      if (!providerEnabled(state.settings, adapter.id)) continue
       const enabled = state.settings.enabledModels?.[adapter.id]
       const discovered = await this.#cachedModels(adapter.id, 'chat', signal).catch(() => [])
       for (const model of discovered) {
@@ -463,15 +518,21 @@ export class GatewayService {
   async #route(request) {
     if (!request.model.startsWith('pool/')) {
       const route = this.registry.resolve(request.model)
-      const enabled = (await this.store.read()).settings.enabledModels?.[route.adapter.id]
+      const settings = (await this.store.read()).settings
+      if (!providerEnabled(settings, route.adapter.id)) {
+        throw Object.assign(new Error(`Провайдер «${route.adapter.label}» отключён`), { status: 404, code: 'provider_disabled' })
+      }
+      const enabled = settings.enabledModels?.[route.adapter.id]
       if (Array.isArray(enabled) && !enabled.includes(route.model)) {
         throw Object.assign(new Error('Модель отключена в настройках'), { status: 404, code: 'model_disabled' })
       }
       return [route]
     }
     const state = await this.store.read()
-    const pool = (state.pools ?? []).find((item) => item.id === request.model.slice(5))
-    if (!pool) throw Object.assign(new Error('Пул не найден'), { status: 404 })
+    const savedPool = (state.pools ?? []).find((item) => item.id === request.model.slice(5))
+    if (!savedPool) throw Object.assign(new Error('Пул не найден'), { status: 404 })
+    const pool = { ...savedPool, members: savedPool.members.filter((member) => providerEnabled(state.settings, member.split('/', 1)[0])) }
+    if (!pool.members.length) throw Object.assign(new Error('Все провайдеры этого пула отключены'), { status: 404, code: 'provider_disabled' })
     const remaining = new Map()
     const windows = new Map()
     const tokens = estimateTokens(request)
@@ -562,6 +623,7 @@ export class GatewayService {
   /** Короткий запрос к дешёвой модели: light | medium | heavy. */
   async #classifyLlm(request, cfg) {
     const route = this.registry.resolve(cfg.model)
+    await this.#enabledAdapter(route.adapter.id)
     const controller = new AbortController()
     const outer = request.signal
     const onAbort = () => controller.abort()
@@ -735,6 +797,11 @@ function renameProviderRefs(settings, from, to) {
     settings.enabledModels[to] = settings.enabledModels[from]
     delete settings.enabledModels[from]
   }
+}
+
+function providerEnabled(settings, providerId) {
+  const custom = (settings?.customProviders ?? []).find((item) => item.id === providerId)
+  return custom?.enabled !== false && !(settings?.disabledProviders ?? []).includes(providerId)
 }
 
 function loggedRequests(state) {

@@ -104,7 +104,8 @@ export class GrokProvider extends SessionProvider {
   async *streamWithSession(request, session) {
     const response = await this.fetch('https://api.x.ai/v1/responses', {
       method: 'POST', headers: { ...auth(session), 'content-type': 'application/json', accept: 'text/event-stream' }, signal: request.signal,
-      body: JSON.stringify(responsesBody(request)),
+      // xAI rejects replayed encrypted reasoning after route/model changes.
+      body: JSON.stringify(responsesBody(request, { replayReasoning: false })),
     })
     if (!response.ok) throw await providerError(response, 'Grok')
     yield* streamResponses(response.body)

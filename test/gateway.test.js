@@ -53,6 +53,26 @@ test('model catalog is cached and refresh bypasses it', async () => {
   assert.equal(calls, 2)
 })
 
+test('provider switch hides models and blocks routing without deleting the provider', async () => {
+  const store = new Store(join(await mkdtemp(join(tmpdir(), 'providers-')), 'state.json'))
+  const provider = new BaseProvider('grok', 'Grok')
+  provider.listModels = async () => [{ id: 'test', name: 'Test' }]
+  provider.stream = async function* () { yield { type: 'text', text: 'ok' } }
+  const service = new GatewayService(store, new ProviderRegistry([provider]))
+
+  assert.equal((await service.models()).data[0].id, 'grok/test')
+  assert.deepEqual(await service.setProviderEnabled('grok', false), { id: 'grok', enabled: false })
+  assert.equal((await service.overview()).providers[0].enabled, false)
+  assert.deepEqual((await service.models()).data, [])
+  const blocked = []
+  for await (const event of service.stream({ model: 'grok/test', messages: [{ role: 'user', content: 'hi' }] })) blocked.push(event)
+  assert.equal(blocked[0].code, 'provider_disabled')
+
+  await service.setProviderEnabled('grok', true)
+  assert.equal((await service.overview()).providers[0].enabled, true)
+  assert.equal((await service.models()).data[0].id, 'grok/test')
+})
+
 test('price estimate uses public API rates for 100k input', () => {
   assert.equal(priceEstimate('codex/gpt-6-astra').input, '≈ $1.00')
   assert.equal(priceEstimate('codex/gpt-6-astra').output, '≈ $5.00')

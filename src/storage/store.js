@@ -35,6 +35,7 @@ const EMPTY = {
     saveFullRequest: false,
     updateCheck: true,
     enabledModels: {},
+    disabledProviders: [],
     complexity: {
       heuristic: { enabled: false, mediumAt: 1, heavyAt: 3 },
       llm: { enabled: false, model: '', timeoutMs: 1500 },
@@ -67,6 +68,9 @@ export class Store {
         llm: { ...EMPTY.settings.complexity.llm, ...(parsed.settings?.complexity?.llm ?? {}) },
       }
       if (!settings.modelTiers || typeof settings.modelTiers !== 'object') settings.modelTiers = {}
+      settings.disabledProviders = Array.isArray(parsed.settings?.disabledProviders)
+        ? [...new Set(parsed.settings.disabledProviders.filter((id) => typeof id === 'string' && /^[a-z0-9_-]{1,32}$/.test(id)))]
+        : []
       const proxy = parsed.settings?.proxy
       settings.proxy = { enabled: Boolean(proxy?.enabled), url: typeof proxy?.url === 'string' ? proxy.url : '' }
       const perProvider = parsed.settings?.providerProxies

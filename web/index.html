@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="darkreader-lock">
   <title>SubToAPI</title>
   <link rel="icon" href="/icon.png" type="image/png">
   <link rel="stylesheet" href="/bootstrap.min.css">
@@ -59,6 +60,7 @@
     .provider[data-id="grok"] { --dot: var(--bs-body-color); }
     .provider[data-id="copilot"] { --dot: #1f6feb; }
     .provider[data-id="antigravity"] { --dot: #4285f4; }
+    .provider.provider-disabled > summary h3, .provider.provider-disabled > .card-body { opacity: .55; }
     .provider > summary h3::before { display: none; }
     /* Логотип всегда равен текущему размеру текста: без крупных значков в таблицах и мелких — в заголовках. */
     .provider-mark { --provider-mark: var(--bs-secondary-color); position: relative; overflow: hidden; display: inline-flex; width: 1em; height: 1em; flex: 0 0 1em; align-items: center; justify-content: center; border-radius: .18em; color: #fff; background: var(--provider-mark); font-size: 1em; font-weight: 800; line-height: 1; font-family: system-ui, sans-serif; vertical-align: -.12em; }

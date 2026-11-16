@@ -29,6 +29,7 @@ test('Responses input keeps every function call, its output, and assistant text'
   assert.deepEqual(resolved.input.filter((item) => item.type === 'function_call').map((item) => item.call_id), ['call-a', 'call-b'])
   assert.equal(resolved.input[1].content[0].text, 'opening both')
   assert.equal(resolved.input[2].encrypted_content, 'enc')
+  assert.equal(resolved.input[2].status, undefined)
   assert.equal(resolved.input.at(-1).output, 'beta')
 })
 
@@ -44,6 +45,7 @@ test('Grok body sends tools; Codex opts out of strict and asks for encrypted rea
   assert.equal(grok.parallel_tool_calls, true)
   assert.equal(grok.include, undefined)
   assert.deepEqual(grok.reasoning, { effort: 'high' })
+  assert.deepEqual(responsesBody({ model: 'm', messages: [{ role: 'assistant', toolCalls: [{ id: 'call-a', name: 'read_file', arguments: '{}' }], reasoningByCallId: { 'call-a': [{ encrypted_content: 'grok-enc' }] } }] }, { replayReasoning: false }).input, [{ type: 'function_call', call_id: 'call-a', name: 'read_file', arguments: '{}' }])
   const codex = codexResponsesBody(request)
   assert.equal(codex.tools[0].strict, false)
   assert.deepEqual(codex.include, ['reasoning.encrypted_content'])
