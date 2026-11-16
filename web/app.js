@@ -1439,6 +1439,7 @@ function openCustomForm(provider) {
   document.querySelector('#custom-key').placeholder = provider?.hasKey ? `Сохранён: ${provider.apiKey}. Пусто — не менять` : ''
   document.querySelector('#custom-models').value = (provider?.models ?? []).join('\n')
   document.querySelector('#custom-headers').value = provider?.headers && Object.keys(provider.headers).length ? JSON.stringify(provider.headers, null, 2) : ''
+  document.querySelector('#custom-cache').checked = provider?.promptCache !== false
   document.querySelector('#custom-status').textContent = ''
   document.querySelector('#custom-label').focus()
 }
@@ -1454,6 +1455,7 @@ function customPayload() {
     models: document.querySelector('#custom-models').value,
     headers: document.querySelector('#custom-headers').value.trim(),
     usageMode: customUsageMode,
+    promptCache: document.querySelector('#custom-cache').checked,
   }
 }
 

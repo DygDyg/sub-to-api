@@ -2,7 +2,7 @@
 // The subscription endpoint rate-limits requests that do not present as Claude Code.
 const CLAUDE_CODE_IDENTITY = 'You are Claude Code, Anthropic\'s official CLI for Claude.'
 function invalid(message) { return Object.assign(new Error(message), { status: 400, code: 'invalid_request' }) }
-export function claudeRequest(request) {
+export function claudeRequest(request, options = {}) {
   const system = []; const messages = []
   for (const message of request.messages) {
     if (message.role === 'system') { if (message.content) system.push(message.content); continue }
@@ -25,12 +25,12 @@ export function claudeRequest(request) {
   if (request.reasoningEffort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(request.reasoningEffort)) throw invalid('Claude: unsupported reasoning effort')
   const maxTokens = request.maxTokens ?? 32000
   if (!Number.isSafeInteger(maxTokens) || maxTokens < 1) throw invalid('Claude: maxTokens must be a positive integer')
-  markCache(messages)
+  if (options.cache !== false) markCache(messages)
   // Identity is always first. tools render before system, so the last mark covers both.
   // Five minutes omits ttl: a one-hour write costs 2× and spends the plan window faster on rapid turns.
   const systemBlocks = [{ type: 'text', text: CLAUDE_CODE_IDENTITY }]
   if (system.length) systemBlocks.push({ type: 'text', text: system.join('\n\n') })
-  systemBlocks.at(-1).cache_control = { type: 'ephemeral' }
+  if (options.cache !== false) systemBlocks.at(-1).cache_control = { type: 'ephemeral' }
   return { model: request.model, max_tokens: maxTokens, stream: true, messages, system: systemBlocks,
     ...(request.tools?.length ? { tools: request.tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) } : {}),
     ...(request.reasoningEffort ? { output_config: { effort: request.reasoningEffort } } : {}),

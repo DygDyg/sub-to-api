@@ -247,7 +247,11 @@
                   <textarea id="custom-headers" class="form-control" rows="3" placeholder='{"HTTP-Referer": "https://example"}'></textarea>
                 </div>
               </div>
-              <div class="d-flex gap-2 justify-content-end">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="custom-cache" checked>
+                <label class="form-check-label" for="custom-cache">Кеш промпта</label>
+                <div class="form-text">OpenAI: передаёт <code>prompt_cache_key</code> наверх. Anthropic: ставит точки кеша — запись стоит дороже входа, выключите для разовых запросов.</div>
+              </div>
                 <button type="button" id="custom-cancel" class="btn btn-outline-secondary">Отмена</button>
                 <button type="button" id="custom-test" class="btn btn-outline-secondary">Проверить</button>
                 <button type="button" id="custom-save" class="btn btn-primary">Сохранить</button>

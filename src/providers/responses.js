@@ -2,6 +2,7 @@ import { usageOf } from './usage.js'
 
 /** call id → reasoning items captured from the previous response. Cursor does not echo encrypted reasoning, so the gateway replays it on the next tool round-trip. */
 const reasoningCache = new Map()
+const rejectedReasoning = new Set()
 const REASONING_CACHE_LIMIT = 200
 
 export function rememberReasoning(callId, items) {
@@ -13,6 +14,20 @@ export function rememberReasoning(callId, items) {
 
 export function reasoningFor(callId) {
   return reasoningCache.get(callId)
+}
+
+/** Drop replay items Codex refused to decrypt so the next turn does not send them again. */
+export function forgetReasoning(items) {
+  const ids = items.map((item) => item?.id).filter(Boolean)
+  if (!ids.length) return
+  for (const id of ids) {
+    rejectedReasoning.add(id)
+    if (rejectedReasoning.size > REASONING_CACHE_LIMIT) rejectedReasoning.delete(rejectedReasoning.keys().next().value)
+  }
+  const blocked = new Set(ids)
+  for (const [callId, cached] of reasoningCache) {
+    if (cached.some((item) => blocked.has(item.id))) reasoningCache.delete(callId)
+  }
 }
 
 const DEFAULT_CODEX_INSTRUCTIONS = 'You are a helpful coding assistant.'
@@ -32,6 +47,7 @@ export function toResponsesInput(request, options = {}) {
   /** @type {Record<string, unknown>[]} */
   const input = []
   let lastReplay
+  const replayed = []
   for (const message of request.messages) {
     if (message.role === 'system') continue
     if (message.role === 'tool') {
@@ -49,7 +65,7 @@ export function toResponsesInput(request, options = {}) {
     if (message.content) content.push({ type: message.role === 'assistant' ? 'output_text' : 'input_text', text: message.content })
     for (const call of message.toolCalls ?? []) {
       flush()
-      const replay = options.replayReasoning === false ? undefined : (message.reasoningByCallId?.[call.id] ?? reasoningFor(call.id))
+      const replay = replayItems(options.replayReasoning === false ? undefined : (message.reasoningByCallId?.[call.id] ?? reasoningFor(call.id)))
       if (replay && replay !== lastReplay) {
         for (const item of replay) {
           input.push({
@@ -59,13 +75,14 @@ export function toResponsesInput(request, options = {}) {
             encrypted_content: item.encrypted_content,
           })
         }
+        replayed.push(...replay)
         lastReplay = replay
       }
       input.push({ type: 'function_call', call_id: call.id, name: call.name, arguments: call.arguments })
     }
     flush()
   }
-  return { ...(instructions ? { instructions } : {}), input }
+  return { ...(instructions ? { instructions } : {}), input, replayed }
 }
 
 /**
@@ -89,6 +106,7 @@ export function toResponsesTools(tools, options = {}) {
  */
 export function responsesBody(request, options = {}) {
   const resolved = toResponsesInput(request, options)
+  delete resolved.replayed
   return {
     model: request.model,
     ...resolved,
@@ -102,10 +120,18 @@ export function responsesBody(request, options = {}) {
   }
 }
 
-export function codexResponsesBody(request) {
-  const body = responsesBody(request, { strict: false, defaultInstructions: DEFAULT_CODEX_INSTRUCTIONS, includeEncryptedReasoning: true })
+export function codexResponsesBody(request, options = {}) {
+  const resolved = toResponsesInput(request, { ...options, defaultInstructions: DEFAULT_CODEX_INSTRUCTIONS })
+  const { replayed = [], ...input } = resolved
+  const body = responsesBody(request, { strict: false, defaultInstructions: DEFAULT_CODEX_INSTRUCTIONS, includeEncryptedReasoning: true, replayReasoning: false, ...options })
+  Object.assign(body, input)
   body.instructions ??= DEFAULT_CODEX_INSTRUCTIONS
-  return body
+  return { body, replayed }
+}
+
+/** Codex rejects encrypted reasoning minted by another model with HTTP 400 invalid_encrypted_content. */
+export function invalidEncryptedContent(error) {
+  return error?.status === 400 && /invalid_encrypted_content|encrypted content/i.test(error.message ?? '')
 }
 
 /**
@@ -242,6 +268,12 @@ export async function* streamResponses(stream) {
     if (translator.terminated) return
   }
   throw Object.assign(new Error('Responses SSE stream ended before response.completed'), { status: 502, code: 'stream_closed' })
+}
+
+function replayItems(items) {
+  if (!items?.length) return undefined
+  const kept = items.filter((item) => item?.encrypted_content && !rejectedReasoning.has(item.id))
+  return kept.length ? kept : undefined
 }
 
 function itemKey(item) {

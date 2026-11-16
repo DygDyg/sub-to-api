@@ -1,6 +1,6 @@
 import { SessionProvider } from './session-provider.js'
 import { providerError } from '../auth/oauth.js'
-import { codexResponsesBody, streamResponses } from './responses.js'
+import { codexResponsesBody, forgetReasoning, invalidEncryptedContent, streamResponses } from './responses.js'
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const TOKEN_URL = 'https://auth.openai.com/oauth/token'
@@ -67,9 +67,20 @@ export class CodexProvider extends SessionProvider {
   }
 
   async *streamWithSession(request, session) {
+    const prepared = codexResponsesBody(request)
+    try {
+      yield* this.#responses(session, prepared.body, request.signal)
+    } catch (error) {
+      if (!prepared.replayed.length || !invalidEncryptedContent(error)) throw error
+      forgetReasoning(prepared.replayed)
+      yield* this.#responses(session, codexResponsesBody(request, { replayReasoning: false }).body, request.signal)
+    }
+  }
+
+  async *#responses(session, body, signal) {
     const response = await this.fetch('https://chatgpt.com/backend-api/codex/responses', {
-      method: 'POST', headers: { ...headers(session), 'content-type': 'application/json', accept: 'text/event-stream', originator: 'codex_cli_rs' }, signal: request.signal,
-      body: JSON.stringify(codexResponsesBody(request)),
+      method: 'POST', headers: { ...headers(session), 'content-type': 'application/json', accept: 'text/event-stream', originator: 'codex_cli_rs' }, signal,
+      body: JSON.stringify(body),
     })
     if (!response.ok) throw await providerError(response, 'Codex')
     yield* streamResponses(response.body)

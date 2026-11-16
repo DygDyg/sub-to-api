@@ -46,6 +46,7 @@ export function normalizeCustomProvider(input, previous) {
     headers,
     models: [...new Set(models)],
     usageMode: input?.usageMode === undefined ? customUsageMode(previous?.usageMode) : customUsageMode(input.usageMode),
+    promptCache: input?.promptCache === undefined ? previous?.promptCache !== false : input.promptCache !== false,
     enabled: input?.enabled === undefined ? previous?.enabled !== false : input.enabled !== false,
   }
 }
@@ -152,7 +153,7 @@ export class CustomApiProvider {
     const response = await this.fetch(this.url('/chat/completions'), {
       method: 'POST',
       headers: this.headers({ 'content-type': 'application/json', accept: 'text/event-stream' }),
-      body: JSON.stringify(openAIBody(request)),
+      body: JSON.stringify(openAIBody(request, this.config.promptCache !== false)),
       signal: request.signal,
     })
     if (!response.ok) throw await providerError(response, this.label)
@@ -160,7 +161,7 @@ export class CustomApiProvider {
   }
 
   async *#streamAnthropic(request) {
-    const body = anthropicBody(request)
+    const body = anthropicBody(request, this.config.promptCache !== false)
     const response = await this.fetch(this.url('/messages'), {
       method: 'POST',
       headers: this.headers({ 'content-type': 'application/json', accept: 'text/event-stream' }),
@@ -173,7 +174,7 @@ export class CustomApiProvider {
 }
 
 /** Канонический запрос → тело OpenAI /chat/completions. */
-export function openAIBody(request) {
+export function openAIBody(request, promptCache = true) {
   const messages = request.messages.map((message) => {
     if (message.role === 'tool') return { role: 'tool', tool_call_id: message.toolCallId, content: message.content ?? '' }
     const out = { role: message.role, content: message.content ?? '' }
@@ -192,12 +193,13 @@ export function openAIBody(request) {
     ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
     ...(request.reasoningEffort ? { reasoning_effort: request.reasoningEffort } : {}),
     ...(request.tools?.length ? { tools: request.tools.map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } })) } : {}),
+    ...(promptCache && request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}),
   }
 }
 
 /** Канонический запрос → тело Anthropic /messages без идентичности Claude Code. */
-export function anthropicBody(request) {
-  const body = claudeRequest({ ...request, reasoningEffort: undefined, maxTokens: request.maxTokens ?? 8192 })
+export function anthropicBody(request, promptCache = true) {
+  const body = claudeRequest({ ...request, reasoningEffort: undefined, maxTokens: request.maxTokens ?? 8192 }, { cache: promptCache })
   const system = body.system.slice(1)
   if (system.length) body.system = system
   else delete body.system

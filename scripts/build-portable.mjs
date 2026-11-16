@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { chmod, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, dirname, join } from 'node:path'
@@ -17,6 +18,7 @@ function run(command, args) {
 }
 
 await rm(buildDir, { recursive: true, force: true })
+await rm(outputDir, { recursive: true, force: true })
 await mkdir(buildDir, { recursive: true })
 await mkdir(outputDir, { recursive: true })
 
@@ -70,6 +72,8 @@ run(process.execPath, [
 
 run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'scripts', 'set-exe-icon.ps1'), '-Exe', executable, '-Icon', join(root, 'assets', 'icon.ico')])
 await hideConsole(executable)
+const updater = join(outputDir, 'updater.exe')
+run(findCsc(), ['/nologo', '/target:winexe', '/optimize+', `/out:${updater}`, join(root, 'scripts', 'updater.cs')])
 await copyFile(join(root, 'scripts', 'tray.ps1'), join(outputDir, 'tray.ps1'))
 await copyFile(join(root, 'scripts', 'update.ps1'), join(outputDir, 'update.ps1'))
 await copyFile(join(root, 'assets', 'icon.ico'), join(outputDir, 'icon.ico'))
@@ -90,6 +94,7 @@ Node.js устанавливать не нужно. Эту папку можно
 Каждый запускает свой экземпляр и входит в свои подписки. Настройки и токены
 создаются в папке settings рядом с программой. Эту папку не нужно отправлять
 вместе с программой: в ней ключи входа.
+Обновления применяет updater.exe; ход обновления записывается в settings\\update.log.
 `, 'utf8')
 const archive = await zipPortable(version)
 const archiveHash = createHash('sha256').update(await readFile(archive)).digest('hex')
@@ -102,6 +107,17 @@ await writeFile(join(root, 'release', 'RELEASE_NOTES.txt'), `Портативн�
 `, 'utf8')
 console.log(`Готово: ${outputDir}`)
 console.log(`Архив: ${archive}`)
+
+function findCsc() {
+  const windows = process.env.SystemRoot || 'C:\\Windows'
+  const candidates = [
+    join(windows, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+    join(windows, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+  ]
+  const compiler = candidates.find(existsSync)
+  if (!compiler) throw new Error('Не найден системный компилятор C# csc.exe')
+  return compiler
+}
 
 async function hideConsole(exe) {
   const bytes = await readFile(exe)
@@ -130,7 +146,7 @@ async function zipPortable(version) {
   await rm(stageRoot, { recursive: true, force: true })
   await rm(archive, { force: true })
   await mkdir(stage, { recursive: true })
-  for (const name of ['sub-to-api.exe', 'start.bat', 'tray.ps1', 'update.ps1', 'icon.ico', 'README.txt', 'THIRD_PARTY_NOTICES.md']) {
+  for (const name of ['sub-to-api.exe', 'updater.exe', 'start.bat', 'tray.ps1', 'update.ps1', 'icon.ico', 'README.txt', 'THIRD_PARTY_NOTICES.md']) {
     await copyFile(join(outputDir, name), join(stage, name))
   }
   run('tar.exe', ['-a', '-c', '-f', archive, '-C', stageRoot, 'SubToAPI'])

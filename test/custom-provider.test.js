@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { CustomApiProvider, anthropicBody, normalizeCustomProvider, streamOpenAI } from '../src/providers/custom.js'
+import { CustomApiProvider, anthropicBody, normalizeCustomProvider, openAIBody, streamOpenAI } from '../src/providers/custom.js'
 import { detectCustomUsage } from '../src/providers/custom-usage.js'
 import { Store } from '../src/storage/store.js'
 import { ProviderRegistry } from '../src/gateway/registry.js'
@@ -52,17 +52,32 @@ test('OpenAI stream yields text, accumulated tool calls and usage', async () => 
   assert.equal(events[4].finishReason, 'tool_calls')
 })
 
+test('OpenAI body forwards the prompt cache key only when caching is on', () => {
+  const request = { model: 'm', messages: [{ role: 'user', content: 'hi' }], promptCacheKey: 'thread-1' }
+  assert.equal(openAIBody(request).prompt_cache_key, 'thread-1')
+  assert.equal(openAIBody(request, false).prompt_cache_key, undefined)
+  assert.equal(openAIBody({ model: 'm', messages: [] }).prompt_cache_key, undefined)
+  assert.equal(normalizeCustomProvider({ id: 'ok', baseUrl: 'https://x' }).promptCache, true)
+  assert.equal(normalizeCustomProvider({ id: 'ok', baseUrl: 'https://x', promptCache: false }).promptCache, false)
+  const kept = normalizeCustomProvider({ id: 'ok', baseUrl: 'https://x', apiKey: 'sk-secret' })
+  assert.equal(normalizeCustomProvider({ ...kept, apiKey: 'sk-s…cret' }, kept).promptCache, true)
+})
+
 test('OpenAI stream surfaces a provider error chunk', async () => {
   await assert.rejects(async () => {
     for await (const _ of streamOpenAI(sse([{ error: { message: 'no credit', type: 'insufficient_quota' } }]))) { /* drain */ }
   }, (error) => error.message === 'no credit' && error.code === 'insufficient_quota')
 })
 
-test('anthropic body drops the Claude Code identity block', () => {
+test('anthropic body drops the Claude Code identity block and cache marks', () => {
   const body = anthropicBody({ model: 'claude-x', messages: [{ role: 'system', content: 'be brief' }, { role: 'user', content: 'hi' }] })
   assert.equal(body.system.length, 1)
   assert.equal(body.system[0].text, 'be brief')
+  assert.deepEqual(body.system[0].cache_control, { type: 'ephemeral' })
   assert.equal(body.stream, true)
+  const plain = anthropicBody({ model: 'claude-x', messages: [{ role: 'user', content: 'hi' }] }, false)
+  assert.equal(plain.system, undefined)
+  assert.equal(JSON.stringify(plain).includes('cache_control'), false)
 })
 
 test('custom provider merges discovered and manual models and streams Anthropic', async () => {

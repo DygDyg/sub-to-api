@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Updater, compareVersions, parseSums, pickAssets } from '../src/update.js'
+import { PACKAGE_FILES, Updater, compareVersions, parseSums, pickAssets, updaterArgs } from '../src/update.js'
 
 function release(tag, assets = []) {
   return {
@@ -21,6 +21,26 @@ const sumsAsset = { name: 'SHA256SUMS.txt', browser_download_url: 'https://examp
 function jsonResponse(status, body) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 }
+
+test('portable package requires updater.exe and passes updater arguments separately', () => {
+  assert.deepEqual(PACKAGE_FILES, ['sub-to-api.exe', 'updater.exe', 'tray.ps1', 'update.ps1'])
+  assert.deepEqual(updaterArgs({
+    pid: 123,
+    source: 'C:\\Temp Folder\\extract\\SubToAPI',
+    target: 'D:\\SubToAPI',
+    port: 8787,
+    settings: 'D:\\SubToAPI\\settings',
+    launchArgs: ['--console', '--no-tray'],
+  }), [
+    '--server-pid', '123',
+    '--source', 'C:\\Temp Folder\\extract\\SubToAPI',
+    '--target', 'D:\\SubToAPI',
+    '--port', '8787',
+    '--settings', 'D:\\SubToAPI\\settings',
+    '--app-arg', '--console',
+    '--app-arg', '--no-tray',
+  ])
+})
 
 test('versions compare by numbers and prereleases are older', () => {
   assert.equal(compareVersions('0.2.10', '0.2.9'), 1)

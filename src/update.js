@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { isSea } from 'node:sea'
 import { APP_VERSION } from './version.js'
@@ -12,7 +12,18 @@ export const FIRST_CHECK_DELAY_MS = 30_000
 const MIN_RECHECK_MS = 10 * 60 * 1000
 const ASSET_PATTERN = /^SubToAPI-.+-win-x64\.zip$/
 const SUMS_NAME = 'SHA256SUMS.txt'
-const PACKAGE_FILES = ['sub-to-api.exe', 'tray.ps1', 'update.ps1']
+export const PACKAGE_FILES = ['sub-to-api.exe', 'updater.exe', 'tray.ps1', 'update.ps1']
+
+export function updaterArgs({ pid, source, target, port, settings, launchArgs = [] }) {
+  return [
+    '--server-pid', String(pid),
+    '--source', source,
+    '--target', target,
+    '--port', String(port),
+    '--settings', settings,
+    ...launchArgs.flatMap((arg) => ['--app-arg', arg]),
+  ]
+}
 
 /** Разбирает версию вида 1.2.3 или v1.2.3. Пре-релизы возвращают prerelease = true. */
 export function parseVersion(value) {
@@ -220,7 +231,7 @@ export class Updater {
   }
 
   /**
-   * Скачивает и распаковывает релиз, затем запускает update.ps1 и вызывает exit().
+   * Скачивает и распаковывает релиз, затем запускает updater.exe и вызывает exit().
    * @param {{ pid: number, port: number, exit: () => void | Promise<void> }} options
    */
   async install({ pid, port, exit }) {
@@ -249,20 +260,22 @@ export class Updater {
       for (const name of PACKAGE_FILES) {
         if (!existsSync(join(source, name))) throw new Error(`В архиве нет ${name}`)
       }
-      // Скрипт запускается из папки update, чтобы копирование не трогало исполняемый файл скрипта.
-      const script = join(this.workDir, 'update.ps1')
-      await copyFile(join(source, 'update.ps1'), script)
       this.state = 'installing'
-      const powershell = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-      const child = spawn(existsSync(powershell) ? powershell : 'powershell.exe', [
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script,
-        '-ServerPid', String(pid),
-        '-Source', source,
-        '-Target', this.appDir,
-        '-Port', String(port),
-        '-Settings', this.dir,
-        ...(this.launchArgs.length ? ['-AppArgs', this.launchArgs.join(' ')] : []),
-      ], { detached: true, stdio: 'ignore', windowsHide: true })
+      await mkdir(this.dir, { recursive: true })
+      await appendFile(join(this.dir, 'update.log'), `${new Date().toISOString()} launching updater.exe\n`, 'utf8')
+      const executable = join(source, 'updater.exe')
+      const child = spawn(executable, updaterArgs({
+        pid,
+        source,
+        target: this.appDir,
+        port,
+        settings: this.dir,
+        launchArgs: this.launchArgs,
+      }), { detached: true, stdio: 'ignore', windowsHide: true, cwd: source })
+      await new Promise((resolve, reject) => {
+        child.once('spawn', resolve)
+        child.once('error', reject)
+      })
       child.unref()
       setTimeout(() => { Promise.resolve(exit()).catch(() => process.exit(0)) }, 300).unref?.()
       return { ok: true, version: this.release.version }

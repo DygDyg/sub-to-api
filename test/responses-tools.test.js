@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { chatCompletionToCanonical, collectChatCompletion, writeChatStream } from '../src/openai/translate.js'
-import { codexResponsesBody, reasoningFor, responsesBody, ResponsesStreamTranslator, streamResponses, toResponsesInput } from '../src/providers/responses.js'
+import { codexResponsesBody, forgetReasoning, reasoningFor, responsesBody, ResponsesStreamTranslator, streamResponses, toResponsesInput } from '../src/providers/responses.js'
 
 const readTool = { name: 'read_file', description: 'Read a file', parameters: { type: 'object', properties: { path: { type: 'string' } } } }
 
@@ -47,9 +47,10 @@ test('Grok body sends tools; Codex opts out of strict and asks for encrypted rea
   assert.deepEqual(grok.reasoning, { effort: 'high' })
   assert.deepEqual(responsesBody({ model: 'm', messages: [{ role: 'assistant', toolCalls: [{ id: 'call-a', name: 'read_file', arguments: '{}' }], reasoningByCallId: { 'call-a': [{ encrypted_content: 'grok-enc' }] } }] }, { replayReasoning: false }).input, [{ type: 'function_call', call_id: 'call-a', name: 'read_file', arguments: '{}' }])
   const codex = codexResponsesBody(request)
-  assert.equal(codex.tools[0].strict, false)
-  assert.deepEqual(codex.include, ['reasoning.encrypted_content'])
-  assert.equal(codex.instructions, 'You are a helpful coding assistant.')
+  assert.equal(codex.body.tools[0].strict, false)
+  assert.deepEqual(codex.body.include, ['reasoning.encrypted_content'])
+  assert.equal(codex.body.instructions, 'You are a helpful coding assistant.')
+  assert.deepEqual(codex.replayed, [])
   assert.equal(responsesBody({ model: 'm', messages: [] }).tools, undefined)
 })
 
@@ -82,6 +83,13 @@ test('reasoning that arrives before the function call is replayed on the next tu
   assert.equal(next.input.filter((item) => item.type === 'reasoning').length, 1)
   assert.equal(next.input[0].encrypted_content, 'enc')
   assert.deepEqual(next.input.slice(1).map((item) => item.call_id), ['call-a', 'call-b'])
+  forgetReasoning([{ id: 'rs_1' }])
+  const retried = toResponsesInput({
+    model: 'grok-4',
+    messages: [{ role: 'assistant', toolCalls: [{ id: 'call-a', name: 'read_file', arguments: '{}' }], reasoningByCallId: { 'call-a': [{ id: 'rs_1', encrypted_content: 'enc' }] } }],
+  })
+  assert.equal(retried.input.some((item) => item.type === 'reasoning'), false)
+  assert.equal(reasoningFor('call-a'), undefined)
 })
 
 test('plain Responses completion still finishes with stop', () => {
