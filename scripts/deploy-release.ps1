@@ -53,7 +53,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not read HEAD' }
 $remoteHead = (& git rev-parse origin/main).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Could not read origin/main' }
 if ($head -ne $remoteHead) { throw 'Local main must match origin/main before deploying' }
-if ((& git tag --list $tag).Trim()) { throw "Git tag already exists: $tag" }
+$existingTag = (& git tag --list $tag | Out-String).Trim()
+if ($existingTag) { throw "Git tag already exists: $tag" }
 
 $oldPackage = Get-Content (Join-Path $repoRoot 'package.json') -Raw | ConvertFrom-Json
 $oldLock = Get-Content (Join-Path $repoRoot 'package-lock.json') -Raw | ConvertFrom-Json
