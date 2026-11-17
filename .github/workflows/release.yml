@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   package:
@@ -31,3 +31,14 @@ jobs:
         run: npm run package
         env:
           SUB_TO_API_VERSION: ${{ github.ref_name }}
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $archive = Get-ChildItem release\SubToAPI-*-win-x64.zip | Select-Object -First 1
+          if (-not $archive) { throw "Release archive was not created" }
+          if (-not (Test-Path release\SHA256SUMS.txt)) { throw "SHA256SUMS.txt was not created" }
+          gh release create $env:RELEASE_TAG $archive.FullName release\SHA256SUMS.txt --title "SubToAPI $env:RELEASE_TAG" --notes-file release\RELEASE_NOTES.txt
