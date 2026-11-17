@@ -21,8 +21,10 @@
     button.sidebar-version:hover, button.sidebar-version:focus-visible { color: var(--bs-body-color); background: var(--bs-tertiary-bg); }
     .update-dialog { width: min(560px, calc(100vw - 2rem)); }
     .update-dialog pre { max-height: 16rem; overflow: auto; white-space: pre-wrap; }
-    .side-limits-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .65rem; }
+    .side-limits-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .65rem; }
     .side-limits-title { margin: 0; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--bs-secondary-color); }
+    .side-limits-updated { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .64rem; color: var(--bs-secondary-color); }
+    .side-limits-head .side-limits-refresh { margin-left: auto; }
     .side-limits-refresh { width: 1.7rem; height: 1.7rem; }
     .side-limits-refresh:disabled svg { animation: stats-refresh-spin .8s linear infinite; }
     .side-limits-status { margin: 0 0 .65rem; font-size: .68rem; color: var(--bs-danger); }
@@ -187,6 +189,7 @@
       <div id="side-limits" class="side-limits" hidden>
         <div class="side-limits-head">
           <p class="side-limits-title">Лимиты</p>
+          <p id="side-limits-updated" class="side-limits-updated" aria-live="polite">ещё не обновлялись</p>
           <button type="button" id="side-limits-refresh" class="btn btn-outline-secondary btn-icon side-limits-refresh" title="Обновить лимиты" aria-label="Обновить лимиты">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M20 12a8 8 0 1 1-2.3-5.6L20 9"/></svg>
           </button>
@@ -224,7 +227,6 @@
               <button id="open-connect" class="btn btn-primary" type="button">Добавить</button>
             </div>
           </div>
-          <p id="home-update-info" class="text-body-secondary small mb-3" aria-live="polite"></p>
           <div id="providers" class="vstack gap-3"></div>
           <dialog id="connect-dialog" class="p-4">
             <form method="dialog" class="vstack gap-3">
