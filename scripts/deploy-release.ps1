@@ -68,7 +68,7 @@ $tagCreated = $false
 try {
     Invoke-Checked npm @('version', $Version, '--no-git-tag-version')
     $versionUpdated = $true
-    Invoke-Checked npm @('--userconfig=NUL', 'ci', '--ignore-scripts')
+    Invoke-Checked npm @('install', '--ignore-scripts')
     Invoke-Checked npm @('run', 'check')
     Invoke-Checked npm @('run', 'package')
 
