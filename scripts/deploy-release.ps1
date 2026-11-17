@@ -57,7 +57,8 @@ if ((& git tag --list $tag).Trim()) { throw "Git tag already exists: $tag" }
 
 $oldPackage = Get-Content (Join-Path $repoRoot 'package.json') -Raw | ConvertFrom-Json
 $oldLock = Get-Content (Join-Path $repoRoot 'package-lock.json') -Raw | ConvertFrom-Json
-if ($oldPackage.version -ne $currentVersion -or $oldLock.version -ne $currentVersion -or $oldLock.packages.''.version -ne $currentVersion) {
+$lockRoot = $oldLock.packages.PSObject.Properties | Where-Object { $_.Name -eq '' } | Select-Object -First 1
+if ($oldPackage.version -ne $currentVersion -or $oldLock.version -ne $currentVersion -or $null -eq $lockRoot -or $lockRoot.Value.version -ne $currentVersion) {
     throw 'package.json and package-lock.json versions must match before deployment'
 }
 
