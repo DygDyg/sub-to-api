@@ -477,6 +477,8 @@ async function fillModels(card, provider, refresh = false) {
 
 const sideLimits = document.querySelector('#side-limits')
 const sideLimitRows = document.querySelector('#side-limit-rows')
+const sideLimitsRefresh = document.querySelector('#side-limits-refresh')
+const sideLimitsStatus = document.querySelector('#side-limits-status')
 const USAGE_REFRESH_MS = 5 * 60 * 1000
 let limitsTimer = 0
 let limitsSeq = 0
@@ -496,23 +498,33 @@ function scheduleLimitsRefresh() {
   }, USAGE_REFRESH_MS + 1000)
 }
 
-async function refreshLimits() {
+async function refreshLimits({ force = false } = {}) {
   if (document.hidden) {
     limitsDue = true
     return
   }
   const seq = ++limitsSeq
+  if (force) {
+    sideLimitsRefresh.disabled = true
+    sideLimitsStatus.textContent = ''
+  }
   try {
-    const payload = await api('/api/usage')
+    const payload = await api(`/api/usage${force ? '?refresh=1' : ''}`)
     if (seq !== limitsSeq) return
+    sideLimitsStatus.textContent = ''
     await renderSideLimits(Promise.resolve(payload))
-    for (const card of providers.children) fillUsage(card, { id: card.dataset.id }, Promise.resolve(payload))
-  } catch {
+    await Promise.all([...providers.children].map((card) => fillUsage(card, { id: card.dataset.id }, Promise.resolve(payload))))
+  } catch (error) {
     if (seq !== limitsSeq) return
+    if (force) sideLimitsStatus.textContent = `Не удалось обновить лимиты: ${error.message}`
     clearTimeout(limitsTimer)
     limitsTimer = setTimeout(refreshLimits, 60 * 1000)
+  } finally {
+    if (force) sideLimitsRefresh.disabled = false
   }
 }
+
+sideLimitsRefresh.onclick = () => refreshLimits({ force: true })
 
 async function renderSideLimits(usageRequest) {
   const payload = await usageRequest
@@ -1200,8 +1212,6 @@ function renderUpdate(update) {
   const toggle = document.querySelector('#update-check')
   const homeCheck = document.querySelector('#home-update-check')
   const homeInfo = document.querySelector('#home-update-info')
-  const sideCheck = document.querySelector('#side-update-check')
-  const sideInfo = document.querySelector('#side-update-info')
   const checkedAt = update.checkedAt ? formatCheckedAt(update.checkedAt) : 'ещё не проверялась'
   const publishedAt = formatPublishedAt(update.publishedAt)
   const availability = update.error && update.state === 'error'
@@ -1212,9 +1222,9 @@ function renderUpdate(update) {
         ? `Установлена последняя версия v${update.current}.`
         : `Установлена v${update.current}.`
   const summary = `${availability} Последняя проверка: ${checkedAt}.${publishedAt ? ` Дата публикации последнего релиза: ${publishedAt}.` : ''}`
-  for (const node of [info, homeInfo, sideInfo]) node.textContent = summary
+  for (const node of [info, homeInfo]) node.textContent = summary
   const checking = update.state === 'checking' || updateInstalling
-  for (const button of [checkNow, homeCheck, sideCheck]) button.disabled = checking
+  for (const button of [checkNow, homeCheck]) button.disabled = checking
   if (!update.supported) {
     banner.hidden = true
     toggle.disabled = true
@@ -1338,13 +1348,13 @@ document.querySelector('#app-version').onclick = async () => {
 document.querySelector('#ud-check').onclick = () => checkUpdateInDialog()
 document.querySelector('#ud-install').onclick = (event) => installUpdate(event.currentTarget, document.querySelector('#ud-latest').textContent, document.querySelector('#ud-status'), document.querySelector('#update-status'))
 async function forceUpdateCheck() {
-  const buttons = ['#update-check-now', '#home-update-check', '#side-update-check'].map((selector) => document.querySelector(selector))
-  for (const node of ['#update-info', '#home-update-info', '#side-update-info']) document.querySelector(node).textContent = 'Проверяю обновления…'
+  const buttons = ['#update-check-now', '#home-update-check'].map((selector) => document.querySelector(selector))
+  for (const node of ['#update-info', '#home-update-info']) document.querySelector(node).textContent = 'Проверяю обновления…'
   buttons.forEach((button) => { button.disabled = true })
   try {
     renderUpdate(await api('/api/update/check', { method: 'POST', body: '{}' }))
   } catch (error) {
-    for (const node of ['#update-info', '#home-update-info', '#side-update-info']) document.querySelector(node).textContent = `Ошибка проверки: ${error.message}`
+    for (const node of ['#update-info', '#home-update-info']) document.querySelector(node).textContent = `Ошибка проверки: ${error.message}`
   } finally {
     buttons.forEach((button) => { button.disabled = updateInstalling })
   }
@@ -1352,7 +1362,6 @@ async function forceUpdateCheck() {
 
 document.querySelector('#update-check-now').onclick = forceUpdateCheck
 document.querySelector('#home-update-check').onclick = forceUpdateCheck
-document.querySelector('#side-update-check').onclick = forceUpdateCheck
 document.querySelector('#update-check').onchange = async (event) => {
   const enabled = event.currentTarget.checked
   try {

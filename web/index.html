@@ -21,9 +21,12 @@
     button.sidebar-version:hover, button.sidebar-version:focus-visible { color: var(--bs-body-color); background: var(--bs-tertiary-bg); }
     .update-dialog { width: min(560px, calc(100vw - 2rem)); }
     .update-dialog pre { max-height: 16rem; overflow: auto; white-space: pre-wrap; }
-    .side-limits-title { margin: 0 0 .65rem; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--bs-secondary-color); }
-    .side-refresh { width: 100%; margin-bottom: .65rem; text-align: left; }
-    .side-updated { margin: -.3rem 0 .65rem; font-size: .68rem; color: var(--bs-secondary-color); }
+    .side-limits-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .65rem; }
+    .side-limits-title { margin: 0; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--bs-secondary-color); }
+    .side-limits-refresh { width: 1.7rem; height: 1.7rem; }
+    .side-limits-refresh:disabled svg { animation: stats-refresh-spin .8s linear infinite; }
+    .side-limits-status { margin: 0 0 .65rem; font-size: .68rem; color: var(--bs-danger); }
+    .side-limits-status:empty { display: none; }
     .side-limit + .side-limit { margin-top: .85rem; }
     .side-limit { --dot: var(--bs-secondary-color); }
     .side-limit[data-id="codex"] { --dot: #10a37f; }
@@ -182,9 +185,13 @@
         <a class="nav-link" href="#docs" data-tab="docs"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M6 19a2 2 0 0 1 2-2h11"/></svg>Документация</a>
       </nav>
       <div id="side-limits" class="side-limits" hidden>
-        <p class="side-limits-title">Лимиты</p>
-        <button type="button" id="side-update-check" class="btn btn-outline-secondary btn-sm side-refresh">Проверить обновления</button>
-        <p id="side-update-info" class="side-updated" aria-live="polite">Версия не проверялась</p>
+        <div class="side-limits-head">
+          <p class="side-limits-title">Лимиты</p>
+          <button type="button" id="side-limits-refresh" class="btn btn-outline-secondary btn-icon side-limits-refresh" title="Обновить лимиты" aria-label="Обновить лимиты">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M20 12a8 8 0 1 1-2.3-5.6L20 9"/></svg>
+          </button>
+        </div>
+        <p id="side-limits-status" class="side-limits-status" aria-live="polite"></p>
         <div id="side-limit-rows"></div>
       </div>
       <div id="update-banner" class="update-banner" hidden>
