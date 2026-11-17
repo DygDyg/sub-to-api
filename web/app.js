@@ -124,7 +124,7 @@ async function load({ refreshUsage = false } = {}) {
       fillModels(card, connected[index], refreshUsage),
     ])),
   ])
-  if (document.querySelector('#tab-stats')?.classList.contains('active')) loadStats().catch(() => undefined)
+  if (document.querySelector('#tab-stats')?.classList.contains('active')) loadStats({ refresh: refreshUsage }).catch(() => undefined)
 }
 
 function requestKey(request) {
@@ -1530,19 +1530,34 @@ document.querySelector('#settings-form').onsubmit = async (event) => {
 
 let statsPayload = null
 
-async function loadStats() {
+async function loadStats({ refresh = false } = {}) {
   const select = document.querySelector('#stats-key')
   const chosen = select.value
-  const query = chosen && chosen !== '*' ? `?key=${encodeURIComponent(chosen === '-' ? '' : chosen)}` : ''
-  const stats = await api(`/api/stats${query}`)
-  const options = ['<option value="*">Общий</option>']
-  if (stats.anonymous) options.push('<option value="-">Без ключа</option>')
-  for (const key of stats.keys ?? []) options.push(`<option value="${escape(key)}">${escape(key)}</option>`)
-  select.innerHTML = options.join('')
-  const next = [...select.options].some((option) => option.value === chosen) ? chosen : '*'
-  select.value = next
-  statsPayload = stats
-  renderStats(stats)
+  const params = new URLSearchParams()
+  if (chosen && chosen !== '*') params.set('key', chosen === '-' ? '' : chosen)
+  if (refresh) params.set('refresh', '1')
+  const query = params.size ? `?${params}` : ''
+  const button = document.querySelector('#stats-refresh')
+  button.disabled = true
+  document.querySelector('#stats-updated').textContent = refresh ? 'Обновляю статистику…' : 'Загружаю статистику…'
+  try {
+    const stats = await api(`/api/stats${query}`)
+    const options = ['<option value="*">Общий</option>']
+    if (stats.anonymous) options.push('<option value="-">Без ключа</option>')
+    for (const key of stats.keys ?? []) options.push(`<option value="${escape(key)}">${escape(key)}</option>`)
+    select.innerHTML = options.join('')
+    const next = [...select.options].some((option) => option.value === chosen) ? chosen : '*'
+    select.value = next
+    statsPayload = stats
+    statsUpdatedAt = stats.updatedAt || Date.now()
+    document.querySelector('#stats-updated').textContent = `Последнее обновление: ${new Date(statsUpdatedAt).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}`
+    renderStats(stats)
+  } catch (error) {
+    document.querySelector('#stats-updated').textContent = `Не удалось обновить статистику: ${error.message}`
+    throw error
+  } finally {
+    button.disabled = false
+  }
 }
 
 function renderStats(stats) {
@@ -1589,6 +1604,10 @@ function cacheCellText(model) {
   return write ? `${formatTokens(read)} · зап. ${formatTokens(write)}` : formatTokens(read)
 }
 
+document.querySelector('#stats-refresh').onclick = () => loadStats({ refresh: true }).catch((error) => {
+  document.querySelector('#stats-charts').replaceChildren()
+  document.querySelector('#stats-table').textContent = error.message
+})
 document.querySelector('#stats-key').onchange = () => loadStats().catch((error) => {
   document.querySelector('#stats-charts').replaceChildren()
   document.querySelector('#stats-table').textContent = error.message

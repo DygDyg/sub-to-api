@@ -125,6 +125,8 @@
     .stats-io-bar span { display: block; min-width: 2px; height: 100%; }
     .stats-legend { display: flex; flex-wrap: wrap; gap: .35rem .75rem; }
     .stats-swatch { width: .7rem; height: .7rem; border-radius: 2px; display: inline-block; }
+    #stats-refresh:disabled svg { animation: stats-refresh-spin .8s linear infinite; }
+    @keyframes stats-refresh-spin { to { transform: rotate(360deg); } }
     .form-switch.switch-end { min-height: 0; padding-left: 0; }
     .form-switch.switch-end .form-check-input { float: none; margin-left: 0; }
     .error { color: var(--bs-danger); }
@@ -601,8 +603,9 @@
             <div>
               <h1 class="h3 mb-1">Статистика</h1>
               <p class="text-body-secondary mb-0">Токены по фактическим моделям и оценка доли текущего лимита по провайдерам.</p>
+              <p id="stats-updated" class="text-body-secondary small mb-0 mt-1" aria-live="polite">Обновление статистики…</p>
             </div>
-            <div class="d-flex flex-wrap gap-3">
+            <div class="d-flex flex-wrap gap-3 align-items-end">
               <div>
                 <label class="form-label" for="stats-cache">Кеш</label>
                 <select id="stats-cache" class="form-select">
@@ -615,6 +618,9 @@
                 <label class="form-label" for="stats-key">Фильтр</label>
                 <select id="stats-key" class="form-select"></select>
               </div>
+              <button type="button" id="stats-refresh" class="btn btn-outline-secondary btn-icon" title="Обновить статистику" aria-label="Обновить статистику">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M20 12a8 8 0 1 1-2.3-5.6L20 9"/></svg>
+              </button>
             </div>
           </div>
           <div id="stats-charts" class="row g-3 mb-3"></div>

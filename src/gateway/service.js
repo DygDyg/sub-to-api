@@ -176,10 +176,10 @@ export class GatewayService {
     return { requests: loggedRequests(await this.store.read()) }
   }
 
-  async stats(signal, key) {
+  async stats(signal, key, refresh = false) {
     const state = await this.store.read()
-    const usage = await this.usageAll(signal, false).catch(() => ({ providers: [] }))
-    return buildStats(state.usageStats, usage.providers ?? [], { key })
+    const usage = await this.usageAll(signal, refresh).catch(() => ({ providers: [] }))
+    return { ...buildStats(state.usageStats, usage.providers ?? [], { key }), updatedAt: Date.now() }
   }
 
   async #enabledAdapter(providerId) {

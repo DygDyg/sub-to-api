@@ -125,7 +125,7 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
   if (request.method === 'GET' && url.pathname === '/api/journal') return send(response, 200, await service.journal())
   if (request.method === 'GET' && url.pathname === '/api/stats') {
     const key = url.searchParams.has('key') ? url.searchParams.get('key') ?? '' : undefined
-    return send(response, 200, await service.stats(request.signal, key))
+    return send(response, 200, await service.stats(request.signal, key, url.searchParams.get('refresh') === '1'))
   }
   if (request.method === 'POST' && url.pathname === '/api/settings') {
     const body = await readJson(request)
