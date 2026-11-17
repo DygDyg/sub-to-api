@@ -476,6 +476,7 @@ async function fillModels(card, provider, refresh = false) {
 }
 
 const sideLimits = document.querySelector('#side-limits')
+const sideLimitRows = document.querySelector('#side-limit-rows')
 const USAGE_REFRESH_MS = 5 * 60 * 1000
 let limitsTimer = 0
 let limitsSeq = 0
@@ -518,19 +519,16 @@ async function renderSideLimits(usageRequest) {
   scheduleLimitsRefresh()
   const rows = (payload.providers ?? []).filter((provider) => provider.usage?.windows?.length)
   const signature = rows.map((provider) => `${provider.id}:${provider.usage.windows.map((item) => `${item.kind}:${item.scope ?? ''}:${item.usedPercent}:${item.resetsAt ?? ''}:${item.used ?? ''}:${item.limit ?? ''}:${item.remaining ?? ''}`).join(',')}`).join('|')
+  sideLimits.hidden = false
+  sideLimitRows.hidden = !rows.length
   if (!rows.length) {
     limitsSignature = ''
-    sideLimits.hidden = true
-    sideLimits.replaceChildren()
+    sideLimitRows.replaceChildren()
     return
   }
   if (signature === limitsSignature) return
   limitsSignature = signature
-  sideLimits.hidden = false
-  const title = document.createElement('p')
-  title.className = 'side-limits-title'
-  title.textContent = 'Лимиты'
-  sideLimits.replaceChildren(title, ...rows.map(sideLimit))
+  sideLimitRows.replaceChildren(...rows.map(sideLimit))
 }
 
 function sideLimit(provider) {
@@ -1189,25 +1187,40 @@ function formatCheckedAt(value) {
   return new Date(value).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
 }
 
+function formatPublishedAt(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('ru-RU')
+}
+
 function renderUpdate(update) {
   const banner = document.querySelector('#update-banner')
   const info = document.querySelector('#update-info')
   const checkNow = document.querySelector('#update-check-now')
   const toggle = document.querySelector('#update-check')
+  const homeCheck = document.querySelector('#home-update-check')
+  const homeInfo = document.querySelector('#home-update-info')
+  const sideCheck = document.querySelector('#side-update-check')
+  const sideInfo = document.querySelector('#side-update-info')
+  const checkedAt = update.checkedAt ? formatCheckedAt(update.checkedAt) : 'ещё не проверялась'
+  const publishedAt = formatPublishedAt(update.publishedAt)
+  const availability = update.error && update.state === 'error'
+    ? `Ошибка проверки: ${update.error}.`
+    : update.available
+      ? `Доступна v${update.latest} (установлена v${update.current}).`
+      : update.latest
+        ? `Установлена последняя версия v${update.current}.`
+        : `Установлена v${update.current}.`
+  const summary = `${availability} Последняя проверка: ${checkedAt}.${publishedAt ? ` Дата публикации последнего релиза: ${publishedAt}.` : ''}`
+  for (const node of [info, homeInfo, sideInfo]) node.textContent = summary
+  const checking = update.state === 'checking' || updateInstalling
+  for (const button of [checkNow, homeCheck, sideCheck]) button.disabled = checking
   if (!update.supported) {
     banner.hidden = true
-    info.textContent = 'Автообновление работает в портативной сборке. При запуске из исходников обновляйте папку через git.'
-    checkNow.disabled = true
     toggle.disabled = true
     return
   }
-  checkNow.disabled = update.state === 'checking' || updateInstalling
   toggle.disabled = false
-  const checked = update.checkedAt ? ` Проверено: ${formatCheckedAt(update.checkedAt)}.` : ''
-  if (update.error && update.state === 'error') info.textContent = `Ошибка: ${update.error}.${checked}`
-  else if (update.available) info.textContent = `Доступна версия v${update.latest}, установлена v${update.current}.${checked}`
-  else if (update.latest) info.textContent = `Установлена последняя версия v${update.current}.${checked}`
-  else info.textContent = `Установлена v${update.current}.${checked}`
   if (!updateInstalling) {
     banner.hidden = !update.available
     document.querySelector('#update-version').textContent = update.latest ? `v${update.latest}` : ''
@@ -1324,18 +1337,22 @@ document.querySelector('#app-version').onclick = async () => {
 }
 document.querySelector('#ud-check').onclick = () => checkUpdateInDialog()
 document.querySelector('#ud-install').onclick = (event) => installUpdate(event.currentTarget, document.querySelector('#ud-latest').textContent, document.querySelector('#ud-status'), document.querySelector('#update-status'))
-document.querySelector('#update-check-now').onclick = async (event) => {
-  const button = event.currentTarget
-  button.disabled = true
-  document.querySelector('#update-info').textContent = 'Проверяю…'
+async function forceUpdateCheck() {
+  const buttons = ['#update-check-now', '#home-update-check', '#side-update-check'].map((selector) => document.querySelector(selector))
+  for (const node of ['#update-info', '#home-update-info', '#side-update-info']) document.querySelector(node).textContent = 'Проверяю обновления…'
+  buttons.forEach((button) => { button.disabled = true })
   try {
     renderUpdate(await api('/api/update/check', { method: 'POST', body: '{}' }))
   } catch (error) {
-    document.querySelector('#update-info').textContent = error.message
+    for (const node of ['#update-info', '#home-update-info', '#side-update-info']) document.querySelector(node).textContent = `Ошибка проверки: ${error.message}`
   } finally {
-    button.disabled = false
+    buttons.forEach((button) => { button.disabled = updateInstalling })
   }
 }
+
+document.querySelector('#update-check-now').onclick = forceUpdateCheck
+document.querySelector('#home-update-check').onclick = forceUpdateCheck
+document.querySelector('#side-update-check').onclick = forceUpdateCheck
 document.querySelector('#update-check').onchange = async (event) => {
   const enabled = event.currentTarget.checked
   try {
