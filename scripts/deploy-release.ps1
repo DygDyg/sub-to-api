@@ -57,8 +57,8 @@ $existingTag = (& git tag --list $tag | Out-String).Trim()
 if ($existingTag) { throw "Git tag already exists: $tag" }
 
 $oldPackage = Get-Content (Join-Path $repoRoot 'package.json') -Raw | ConvertFrom-Json
-$oldLock = Get-Content (Join-Path $repoRoot 'package-lock.json') -Raw | ConvertFrom-Json
-if ($oldPackage.version -ne $currentVersion -or $oldLock.version -ne $currentVersion) {
+$lockVersions = Select-String -Path (Join-Path $repoRoot 'package-lock.json') -Pattern '^\s+"version": "([^"]+)"' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+if ($oldPackage.version -ne $currentVersion -or $lockVersions.Count -lt 2 -or $lockVersions[0] -ne $currentVersion -or $lockVersions[1] -ne $currentVersion) {
     throw 'package.json and package-lock.json versions must match before deployment'
 }
 
