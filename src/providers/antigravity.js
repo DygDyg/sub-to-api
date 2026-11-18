@@ -51,6 +51,7 @@ export class AntigravityProvider extends SessionProvider {
   }
 }
 
+export function antigravityAuthHeaders(session) { return { authorization: `Bearer ${session.accessToken}`, accept: 'application/json' } }
 function tokensToSession(tokens, previous = {}) {
   if (!tokens.access_token && !previous.accessToken) throw new Error('Google не вернул access token')
   return { accessToken: tokens.access_token ?? previous.accessToken, refreshToken: tokens.refresh_token ?? previous.refreshToken, expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000, clientId: previous.clientId }

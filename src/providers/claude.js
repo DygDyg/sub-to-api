@@ -29,6 +29,7 @@ async function responseError(response, label) {
   const detail = label === 'Claude' && typeof payload?.error?.message === 'string' ? `: ${payload.error.message.replace(/\s+/g, ' ').slice(0, 300)}` : ''
   return failure(`${label}: HTTP ${response.status} (${safeCode})${detail}`, response.status, safeCode)
 }
+export function claudeAuthHeaders(session) { return headers(session) }
 function headers(session) {
   return { authorization: `Bearer ${session.accessToken}`, 'anthropic-version': '2023-06-01', 'anthropic-beta': BETA, 'user-agent': `claude-cli/${CLI_VERSION} (external, cli)`, 'x-app': 'cli', 'anthropic-dangerous-direct-browser-access': 'true', accept: 'application/json' }
 }

@@ -14,6 +14,7 @@ import { Updater } from './update.js'
 import { CodexProvider } from './providers/codex.js'
 import { ClaudeProvider } from './providers/claude.js'
 import { GrokProvider } from './providers/grok.js'
+import { GrokBotProvider } from './providers/grokbot.js'
 import { CopilotProvider } from './providers/copilot.js'
 import { AntigravityProvider } from './providers/antigravity.js'
 
@@ -42,6 +43,7 @@ async function main() {
     new CodexProvider(store),
     new ClaudeProvider(store),
     new GrokProvider(store),
+    new GrokBotProvider(store),
     new CopilotProvider(store),
     new AntigravityProvider(store),
   ])

@@ -1,11 +1,12 @@
-/** @typedef {'codex' | 'claude' | 'grok' | 'copilot' | 'antigravity'} ProviderId */
+/** @typedef {'codex' | 'claude' | 'grok' | 'grokbot' | 'copilot' | 'antigravity'} ProviderId */
 
-export const PROVIDER_IDS = ['codex', 'claude', 'grok', 'copilot', 'antigravity']
+export const PROVIDER_IDS = ['codex', 'claude', 'grok', 'grokbot', 'copilot', 'antigravity']
 
 export const PROVIDER_LABELS = {
   codex: 'ChatGPT / Codex',
   claude: 'Claude',
   grok: 'Grok',
+  grokbot: 'Grok Bot',
   copilot: 'GitHub Copilot',
   antigravity: 'Google Antigravity',
 }

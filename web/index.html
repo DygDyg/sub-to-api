@@ -21,9 +21,10 @@
     button.sidebar-version:hover, button.sidebar-version:focus-visible { color: var(--bs-body-color); background: var(--bs-tertiary-bg); }
     .update-dialog { width: min(560px, calc(100vw - 2rem)); }
     .update-dialog pre { max-height: 16rem; overflow: auto; white-space: pre-wrap; }
-    .side-limits-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .65rem; }
-    .side-limits-title { margin: 0; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--bs-secondary-color); }
-    .side-limits-updated { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .64rem; color: var(--bs-secondary-color); }
+    .side-limits-head { display: flex; align-items: flex-start; gap: .5rem; margin-bottom: .65rem; }
+    .side-limits-copy { min-width: 0; flex: 1; }
+    .side-limits-title { margin: .2rem 0 0; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--bs-secondary-color); }
+    .side-limits-updated { min-width: 0; margin: .15rem 0 0; font-size: .64rem; line-height: 1.3; color: var(--bs-secondary-color); font-variant-numeric: tabular-nums; }
     .side-limits-head .side-limits-refresh { margin-left: auto; }
     .side-limits-refresh { width: 1.7rem; height: 1.7rem; }
     .side-limits-refresh:disabled svg { animation: stats-refresh-spin .8s linear infinite; }
@@ -34,6 +35,7 @@
     .side-limit[data-id="codex"] { --dot: #10a37f; }
     .side-limit[data-id="claude"] { --dot: #d97757; }
     .side-limit[data-id="grok"] { --dot: var(--bs-body-color); }
+    .side-limit[data-id="grokbot"] { --dot: #111; }
     .side-limit[data-id="copilot"] { --dot: #1f6feb; }
     .side-limit[data-id="antigravity"] { --dot: #4285f4; }
     .side-limit-name { display: flex; align-items: center; gap: .4rem; min-width: 0; font-size: .8rem; font-weight: 600; }
@@ -66,6 +68,7 @@
     .provider[data-id="codex"] { --dot: #10a37f; }
     .provider[data-id="claude"] { --dot: #d97757; }
     .provider[data-id="grok"] { --dot: var(--bs-body-color); }
+    .provider[data-id="grokbot"] { --dot: #111; }
     .provider[data-id="copilot"] { --dot: #1f6feb; }
     .provider[data-id="antigravity"] { --dot: #4285f4; }
     .provider.provider-disabled > summary h3, .provider.provider-disabled > .card-body { opacity: .55; }
@@ -75,6 +78,7 @@
     .provider-mark.codex { --provider-mark: #10a37f; }
     .provider-mark.claude { --provider-mark: #d97757; }
     .provider-mark.grok { --provider-mark: #333; }
+    .provider-mark.grokbot { --provider-mark: #111; }
     .provider-mark.copilot { --provider-mark: #1f6feb; }
     .provider-mark.antigravity { --provider-mark: #4285f4; }
     .provider-mark.custom { --provider-mark: #6f42c1; position: relative; overflow: hidden; }
@@ -188,8 +192,10 @@
       </nav>
       <div id="side-limits" class="side-limits" hidden>
         <div class="side-limits-head">
-          <p class="side-limits-title">Лимиты</p>
-          <p id="side-limits-updated" class="side-limits-updated" aria-live="polite">ещё не обновлялись</p>
+          <div class="side-limits-copy">
+            <p class="side-limits-title">Лимиты</p>
+            <p id="side-limits-updated" class="side-limits-updated">ещё не обновлялись</p>
+          </div>
           <button type="button" id="side-limits-refresh" class="btn btn-outline-secondary btn-icon side-limits-refresh" title="Обновить лимиты" aria-label="Обновить лимиты">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M20 12a8 8 0 1 1-2.3-5.6L20 9"/></svg>
           </button>
@@ -454,6 +460,24 @@
                     <summary class="small text-body-secondary">Прокси отдельно для каждого провайдера</summary>
                     <div id="provider-proxies" class="vstack gap-2 mt-2"></div>
                   </details>
+                </div>
+              </article>
+            </div>
+            <div class="col-12">
+              <article class="card shadow-sm">
+                <div class="card-body">
+                  <h2 class="h5 mb-1">Клиент Codex</h2>
+                  <p class="text-body-secondary small mb-3">Версия передаётся в запрос каталога моделей. «Последняя» берётся из стабильных релизов Codex CLI на GitHub.</p>
+                  <div class="row g-2 align-items-center">
+                    <div class="col-md-6">
+                      <label class="form-label" for="codex-version">Версия клиента</label>
+                      <select id="codex-version" class="form-select"><option value="auto">Последняя с GitHub</option></select>
+                    </div>
+                    <div class="col-md-auto">
+                      <button type="button" id="codex-version-refresh" class="btn btn-outline-secondary">Обновить список</button>
+                    </div>
+                  </div>
+                  <p id="codex-version-status" class="text-body-secondary small mb-0 mt-3"></p>
                 </div>
               </article>
             </div>

@@ -76,6 +76,7 @@ export class CopilotProvider {
   }
 }
 
+export function copilotAuthHeaders(session) { return headers(session) }
 function headers(session) { return { authorization: `Bearer ${session.accessToken}`, accept: 'application/json', 'user-agent': 'GitHubCopilotChat/0.35.0', 'editor-version': 'vscode/1.107.0', 'editor-plugin-version': 'copilot-chat/0.35.0', 'copilot-integration-id': 'vscode-chat', 'x-github-api-version': '2026-06-01' } }
 async function views(state, id) { const bucket = state.accounts[id]; return bucket ? Object.entries(bucket.accounts).map(([key, session]) => ({ key, label: session.account || key, expiresAt: session.expiresAt, isDefault: bucket.default === key })) : [] }
 async function remove(store, id, key) { await store.update((state) => { delete state.accounts[id]?.accounts[key]; if (state.accounts[id]?.default === key) state.accounts[id].default = Object.keys(state.accounts[id].accounts)[0] }) }

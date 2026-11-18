@@ -108,6 +108,7 @@ async function load({ refreshUsage = false } = {}) {
   renderCustomProviders(overview.customProviders ?? [])
   document.querySelector('#app-version').textContent = overview.version ? `v${overview.version}` : ''
   document.querySelector('#update-check').checked = overview.settings.updateCheck !== false
+  loadCodexVersions().catch((error) => { document.querySelector('#codex-version-status').textContent = error.message })
   applyComplexity(overview.settings.complexity)
   loadUpdate().catch(() => undefined)
   const open = new Set(JSON.parse(localStorage.getItem('provider-open') || '[]'))
@@ -243,10 +244,11 @@ function renderProvider(provider, opened) {
     ? provider.accounts.map((account) => `<li class="list-group-item d-flex justify-content-between align-items-center gap-2"><span>${escape(account.label ?? account.key)}${account.isDefault ? ' · основной' : ''}</span><button type="button" class="btn btn-outline-danger btn-sm" data-logout="${escape(account.key)}">Выйти</button></li>`).join('')
     : '<li class="list-group-item text-body-secondary">Нет аккаунтов</li>'
   card.innerHTML = `
-    <summary class="card-header d-flex align-items-center gap-2"><div class="d-flex flex-grow-1 justify-content-between align-items-center gap-3 min-w-0"><div class="min-w-0"><h3 class="h6 mb-0">${providerMark(provider.id, provider.label)}${escape(provider.label)}</h3><p class="text-body-secondary small mb-0 text-truncate" data-summary>${provider.enabled === false ? 'отключён' : provider.loginKind}</p></div><label class="form-check form-switch switch-end d-flex align-items-center gap-2 mb-0 flex-none" data-provider-toggle><input class="form-check-input" type="checkbox" role="switch" aria-label="Включить ${escape(provider.label)}" ${provider.enabled === false ? '' : 'checked'}><span class="small">Включён</span></label></div></summary>
+    <summary class="card-header d-flex align-items-center gap-2"><div class="d-flex flex-grow-1 justify-content-between align-items-center gap-3 min-w-0"><div class="min-w-0"><h3 class="h6 mb-0">${providerMark(provider.id, provider.label)}${escape(provider.label)}</h3><p class="text-body-secondary small mb-0 text-truncate" data-summary>${provider.enabled === false ? 'отключён' : provider.accounts.length ? 'подключён' : provider.loginKind}</p></div><label class="form-check form-switch switch-end d-flex align-items-center gap-2 mb-0 flex-none" data-provider-toggle><input class="form-check-input" type="checkbox" role="switch" aria-label="Включить ${escape(provider.label)}" ${provider.enabled === false ? '' : 'checked'}><span class="small">Включён</span></label></div></summary>
     <div class="card-body vstack gap-3">
       <ul class="list-group">${accounts}</ul>
       <div data-usage class="vstack gap-3"><p class="text-body-secondary mb-0">Квота загружается…</p></div>
+      ${provider.id === 'grokbot' ? `<label class="form-check form-switch mb-0"><input class="form-check-input" type="checkbox" role="switch" data-show-all ${provider.showAllModels ? 'checked' : ''}><span class="form-check-label">Показать все модели Cursor <span class="text-body-secondary">для теста, это не список Grok Bot</span></span></label>` : ''}
       <div data-models><p class="text-body-secondary mb-0">Модели загружаются…</p></div>
       <p class="error small mb-0" data-status></p>
       ${provider.custom ? '<div class="d-flex gap-2"><button type="button" class="btn btn-outline-secondary btn-sm" data-custom-edit>Изменить</button><button type="button" class="btn btn-outline-danger btn-sm" data-custom-remove>Удалить</button></div>' : ''}
@@ -282,6 +284,18 @@ function renderProvider(provider, opened) {
       await load()
     }
   }
+  card.querySelector('[data-show-all]')?.addEventListener('change', async (event) => {
+    const input = event.currentTarget
+    input.disabled = true
+    try {
+      await api(`/api/providers/${provider.id}/options`, { method: 'POST', body: JSON.stringify({ showAllModels: input.checked }) })
+      provider.showAllModels = input.checked
+      await fillModels(card, provider, true)
+    } catch (error) {
+      input.checked = !input.checked
+      card.querySelector('[data-status]').textContent = error.message
+    } finally { input.disabled = false }
+  })
   card.querySelectorAll('[data-logout]').forEach((logout) => {
     logout.onclick = async () => {
       await api(`/api/providers/${provider.id}/accounts/${encodeURIComponent(logout.dataset.logout)}`, { method: 'DELETE' })
@@ -324,11 +338,15 @@ function openConnect(available) {
     form.hidden = true
   }
   document.querySelector('#connect-finish').onclick = async () => {
+    const button = document.querySelector('#connect-finish')
+    button.disabled = true
+    status.textContent = 'Жду подтверждение входа…'
     try {
       await api(`/api/providers/${current}/complete`, { method: 'POST', body: JSON.stringify({ callback: form.querySelector('[name="callback"]').value }) })
       dialog.close()
       await load()
     } catch (error) { status.textContent = error.message }
+    finally { button.disabled = false }
   }
   dialog.showModal()
 }
@@ -378,8 +396,8 @@ function providerId(value) {
 function providerMark(provider, label = provider) {
   const id = providerId(provider)
   const custom = customProviderList.find((item) => item.id === id)
-  const glyph = { codex: 'O', claude: 'A', grok: 'X', copilot: 'C', antigravity: 'G' }[id] ?? 'API'
-  const builtInLogo = ['codex', 'claude', 'grok', 'copilot', 'antigravity'].includes(id) ? `/providers/${id}.png` : ''
+  const glyph = { codex: 'O', claude: 'A', grok: 'X', grokbot: 'B', copilot: 'C', antigravity: 'G' }[id] ?? 'API'
+  const builtInLogo = ['codex', 'claude', 'grok', 'grokbot', 'copilot', 'antigravity'].includes(id) ? `/providers/${id}.png` : ''
   let favicon = builtInLogo ? `<img src="${builtInLogo}" alt="" aria-hidden="true">` : ''
   if (!favicon && custom?.baseUrl) favicon = `<img src="/api/providers/${encodeURIComponent(id)}/favicon" alt="" aria-hidden="true">`
   const title = custom?.label || label || provider || 'Провайдер'
@@ -485,6 +503,7 @@ let limitsTimer = 0
 let limitsSeq = 0
 let limitsDue = false
 let limitsSignature = ''
+let limitsFetchedAt = 0
 
 function scheduleLimitsRefresh() {
   clearTimeout(limitsTimer)
@@ -529,9 +548,12 @@ sideLimitsRefresh.onclick = () => refreshLimits({ force: true })
 
 async function renderSideLimits(usageRequest) {
   const payload = await usageRequest
-  sideLimitsUpdated.textContent = payload.fetchedAt
-    ? `обновлено ${new Date(payload.fetchedAt).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}`
-    : 'дата неизвестна'
+  limitsFetchedAt = Number(payload.fetchedAt) || 0
+  if (limitsFetchedAt) paintLimitsUpdated()
+  else {
+    sideLimitsUpdated.textContent = 'дата неизвестна'
+    sideLimitsUpdated.removeAttribute('title')
+  }
   scheduleLimitsRefresh()
   const rows = (payload.providers ?? []).filter((provider) => provider.usage?.windows?.length)
   const signature = rows.map((provider) => `${provider.id}:${provider.usage.windows.map((item) => `${item.kind}:${item.scope ?? ''}:${item.usedPercent}:${item.resetsAt ?? ''}:${item.used ?? ''}:${item.limit ?? ''}:${item.remaining ?? ''}`).join(',')}`).join('|')
@@ -604,7 +626,30 @@ function resetShort(timestamp) {
   return `${mins || 1}м`
 }
 
+function elapsedSince(timestamp) {
+  const passed = Date.now() - timestamp
+  if (passed < 5000) return 'только что'
+  const seconds = Math.floor(passed / 1000)
+  if (seconds < 60) return `${seconds} с назад`
+  const minutes = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  if (minutes < 60) return secs ? `${minutes} мин ${secs} с назад` : `${minutes} мин назад`
+  const hours = Math.floor(minutes / 60)
+  const mins = minutes % 60
+  if (hours < 24) return mins ? `${hours} ч ${mins} мин назад` : `${hours} ч назад`
+  const days = Math.floor(hours / 24)
+  const remHours = hours % 24
+  return remHours ? `${days} д ${remHours} ч назад` : `${days} д назад`
+}
+
+function paintLimitsUpdated() {
+  if (!limitsFetchedAt) return
+  sideLimitsUpdated.textContent = elapsedSince(limitsFetchedAt)
+  sideLimitsUpdated.title = `Обновлено ${new Date(limitsFetchedAt).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}`
+}
+
 function tickSideResets() {
+  paintLimitsUpdated()
   if (document.hidden || sideLimits.hidden) return
   sideLimits.querySelectorAll('[data-reset]').forEach((node) => {
     const at = Number(node.dataset.reset)
@@ -1363,6 +1408,34 @@ async function forceUpdateCheck() {
   }
 }
 
+async function loadCodexVersions(refresh = false) {
+  const select = document.querySelector('#codex-version')
+  const status = document.querySelector('#codex-version-status')
+  const payload = await api(`/api/codex/versions${refresh ? '?refresh=1' : ''}`)
+  const versions = Array.isArray(payload.versions) ? payload.versions : []
+  const selected = payload.selected || 'auto'
+  select.replaceChildren(new Option('Последняя с GitHub', 'auto'), ...versions.map((version) => new Option(version, version)))
+  if (selected !== 'auto' && ![...select.options].some((option) => option.value === selected)) select.add(new Option(`${selected} (сохранённая)`, selected))
+  select.value = [...select.options].some((option) => option.value === selected) ? selected : 'auto'
+  status.textContent = payload.effective ? `Сейчас используется ${payload.effective}${selected === 'auto' ? ', последняя известная' : ''}.` : 'Список версий ещё не получен.'
+}
+
+document.querySelector('#codex-version').onchange = async (event) => {
+  const status = document.querySelector('#codex-version-status')
+  event.currentTarget.disabled = true
+  try {
+    const payload = await api('/api/codex/version', { method: 'POST', body: JSON.stringify({ version: event.currentTarget.value }) })
+    status.textContent = `Сохранено. Сейчас используется ${payload.effective}.`
+    if (document.querySelector('#tab-models').classList.contains('active')) loadCatalog(true)
+  } catch (error) {
+    status.textContent = error.message
+  } finally { event.currentTarget.disabled = false }
+}
+document.querySelector('#codex-version-refresh').onclick = async (event) => {
+  event.currentTarget.disabled = true
+  try { await loadCodexVersions(true) } catch (error) { document.querySelector('#codex-version-status').textContent = error.message }
+  finally { event.currentTarget.disabled = false }
+}
 document.querySelector('#update-check-now').onclick = forceUpdateCheck
 document.querySelector('#home-update-check').onclick = forceUpdateCheck
 document.querySelector('#update-check').onchange = async (event) => {
@@ -1900,7 +1973,7 @@ document.addEventListener('visibilitychange', () => {
   if (limitsDue) refreshLimits()
   tickSideResets()
 })
-setInterval(tickSideResets, 60 * 1000)
+setInterval(tickSideResets, 1000)
 setInterval(() => { if (journalWatch && !document.hidden) refreshJournal() }, 4000)
 rememberSettingsQuery()
 load().catch((error) => {

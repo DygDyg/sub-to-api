@@ -51,6 +51,7 @@ const config = {
     'providers/codex.png': 'web/providers/codex.png',
     'providers/copilot.png': 'web/providers/copilot.png',
     'providers/grok.png': 'web/providers/grok.png',
+    'providers/grokbot.png': 'web/providers/grokbot.png',
     'bootstrap.min.css': 'web/bootstrap.min.css',
   },
 }

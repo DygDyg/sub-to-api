@@ -1,3 +1,4 @@
+import { CodexVersions, resolveCodexVersion } from './codex-versions.js'
 import { SessionProvider } from './session-provider.js'
 import { providerError } from '../auth/oauth.js'
 import { codexResponsesBody, forgetReasoning, invalidEncryptedContent, streamResponses } from './responses.js'
@@ -6,7 +7,8 @@ const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const TOKEN_URL = 'https://auth.openai.com/oauth/token'
 
 export class CodexProvider extends SessionProvider {
-  constructor(store) { super(store, 'codex', 'ChatGPT / Codex') }
+  /** @param {import('../storage/store.js').Store} store @param {{ versions?: CodexVersions }} [options] */
+  constructor(store, options = {}) { super(store, 'codex', 'ChatGPT / Codex'); this.versions = options.versions ?? new CodexVersions() }
 
   oauthSpec() {
     return {
@@ -33,10 +35,16 @@ export class CodexProvider extends SessionProvider {
   async listModels(_account, signal) {
     const session = await this.session().catch(() => undefined)
     if (!session) return []
-    const response = await this.fetch('https://chatgpt.com/backend-api/codex/models?client_version=0.153.4', { headers: headers(session), signal })
+    const version = await this.clientVersion()
+    const response = await this.fetch(`https://chatgpt.com/backend-api/codex/models?client_version=${encodeURIComponent(version)}`, { headers: headers(session), signal })
     if (!response.ok) throw await providerError(response, 'Codex models')
     const payload = await response.json()
     return (payload.models ?? []).filter((model) => model.visibility !== 'hide' && model.visibility !== 'none').map((model) => ({ id: model.slug, name: model.display_name || model.slug, description: model.description, contextWindow: model.context_window, efforts: model.supported_reasoning_levels?.map((level) => level.effort).filter(Boolean), supportsImages: true, supportsTools: true }))
+  }
+
+  async clientVersion() {
+    const saved = (await this.store.read()).settings.providerOptions?.codex?.clientVersion
+    return resolveCodexVersion(saved, await this.versions.list().catch(() => []))
   }
 
   async usage(_account, signal) {
@@ -87,7 +95,8 @@ export class CodexProvider extends SessionProvider {
   }
 }
 
-function headers(session) { return { authorization: `Bearer ${session.accessToken}`, 'chatgpt-account-id': session.accountId, accept: 'application/json' } }
+export function codexAuthHeaders(session) { return { authorization: `Bearer ${session.accessToken}`, 'chatgpt-account-id': session.accountId, accept: 'application/json' } }
+function headers(session) { return codexAuthHeaders(session) }
 function claims(token) { try { return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) } catch { return {} } }
 function normalize(tokens, previous = {}) {
   const id = claims(tokens.id_token ?? previous.idToken ?? '')

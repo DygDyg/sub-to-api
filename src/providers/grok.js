@@ -128,6 +128,7 @@ const GROK_CONTEXT = { 'grok-4.7': 256000, 'grok-4.7-build-fast': 256000, 'grok-
 function grokAspect(size) {
   return { '1024x1024': '1:1', '1024x1536': '2:3', '1536x1024': '3:2', auto: 'auto' }[size] ?? size
 }
+export function grokAuthHeaders(session) { return auth(session) }
 function auth(session) { return { authorization: `Bearer ${session.accessToken}`, accept: 'application/json' } }
 function normalize(tokens, tokenEndpoint, previous = {}) {
   if (!tokens.access_token || !tokens.expires_in) throw new Error('Grok не вернул токен')

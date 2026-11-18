@@ -7,6 +7,8 @@ import { buildStats, recordUsage } from '../stats.js'
 import { LAST_REQUEST_PATH } from '../storage/store.js'
 import { writeFile } from 'node:fs/promises'
 import { CustomApiProvider, normalizeCustomProvider, publicCustomProvider } from '../providers/custom.js'
+import { codexVersion, resolveCodexVersion } from '../providers/codex-versions.js'
+import { authHeadersFor, probeRequest, runProbe } from '../providers/probe.js'
 import { detectCustomUsage } from '../providers/custom-usage.js'
 import { fetchVia, proxyFor } from '../proxy.js'
 
@@ -89,6 +91,18 @@ export class GatewayService {
     return new CustomApiProvider(this.store, config, { fetch: (url, init) => fetchVia(proxyFor({ ...settings, providerProxies }, config.id), url, init) })
   }
 
+  /**
+   * Локальная диагностика upstream от имени сохранённой сессии.
+   * Секреты не принимаются во входных заголовках и вырезаются из ответа.
+   */
+  async probeProvider(providerId, input, signal) {
+    const adapter = this.registry.get(providerId)
+    const request = probeRequest(providerId, input)
+    const session = typeof adapter.session === 'function' ? await adapter.session() : undefined
+    const headers = { ...authHeadersFor(providerId, session), ...request.headers }
+    return runProbe(adapter.fetch, { ...request, headers }, signal)
+  }
+
   /** Проверка своего провайдера: модели и автоопределение квоты без сохранения. @param {any} input */
   async testCustomProvider(input) {
     const state = await this.store.read()
@@ -120,6 +134,7 @@ export class GatewayService {
         ...(adapter.custom ? { custom: true, protocol: adapter.protocol } : {}),
         enabled: providerEnabled(state.settings, adapter.id),
         clientId: adapter.id === 'antigravity' ? state.settings.antigravityClientId : undefined,
+        ...(adapter.id === 'grokbot' ? { showAllModels: Boolean(state.settings.providerOptions?.grokbot?.showAllModels) } : {}),
         accounts,
       })
     }
@@ -170,6 +185,39 @@ export class GatewayService {
       })
     }
     return { id: providerId, enabled: providerEnabled(state.settings, providerId) }
+  }
+
+  async codexVersions(refresh = false) {
+    const adapter = this.registry.get('codex')
+    const versions = typeof adapter.versions?.list === 'function' ? await adapter.versions.list({ force: refresh }) : []
+    const selected = (await this.store.read()).settings.providerOptions?.codex?.clientVersion || 'auto'
+    return { versions, selected, effective: resolveCodexVersion(selected, versions) }
+  }
+
+  async setCodexVersion(version) {
+    const value = version === 'auto' || version === '' ? 'auto' : codexVersion(version)
+    if (!value) throw Object.assign(new Error('Некорректная версия клиента Codex'), { status: 400 })
+    await this.store.update((state) => {
+      state.settings.providerOptions ??= {}
+      state.settings.providerOptions.codex = { ...state.settings.providerOptions.codex, clientVersion: value }
+    })
+    this.modelCache.delete('codex:chat')
+    return this.codexVersions()
+  }
+
+  /** Тестовый полный каталог Cursor для Grok Bot. Остальные провайдеры его не имеют. */
+  async setProviderOptions(providerId, options) {
+    const adapter = this.registry.get(providerId)
+    if (adapter.id !== 'grokbot' || typeof options?.showAllModels !== 'boolean') {
+      throw Object.assign(new Error('Неизвестная настройка провайдера'), { status: 400 })
+    }
+    await this.store.update((state) => {
+      state.settings.providerOptions ??= {}
+      state.settings.providerOptions.grokbot = { ...state.settings.providerOptions.grokbot, showAllModels: options.showAllModels }
+      if (!options.showAllModels) delete state.settings.enabledModels?.grokbot
+    })
+    this.modelCache.delete(`${providerId}:chat`)
+    return { id: providerId, showAllModels: options.showAllModels }
   }
 
   async journal() {

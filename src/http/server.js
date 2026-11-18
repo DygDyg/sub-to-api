@@ -227,6 +227,15 @@ async function handleAdmin(service, store, runtime, hooks, url, request, respons
     const body = await readJson(request)
     return send(response, 200, await service.setProviderEnabled(providerState[1], body.enabled))
   }
+  const providerOptions = /^\/api\/providers\/([a-z0-9_-]+)\/options$/.exec(url.pathname)
+  if (providerOptions && request.method === 'POST') return send(response, 200, await service.setProviderOptions(providerOptions[1], await readJson(request)))
+  const probe = /^\/api\/providers\/([a-z0-9_-]+)\/probe$/.exec(url.pathname)
+  if (probe && request.method === 'POST') {
+    if (isInternetAddress(request.socket.remoteAddress)) throw Object.assign(new Error('Диагностика доступна только из локальной сети'), { status: 403 })
+    return send(response, 200, await service.probeProvider(probe[1], await readJson(request), request.signal))
+  }
+  if (request.method === 'GET' && url.pathname === '/api/codex/versions') return send(response, 200, await service.codexVersions(url.searchParams.get('refresh') === '1'))
+  if (request.method === 'POST' && url.pathname === '/api/codex/version') return send(response, 200, await service.setCodexVersion((await readJson(request))?.version))
   const models = /^\/api\/providers\/([a-z0-9_-]+)\/models$/.exec(url.pathname)
   if (models && request.method === 'GET') return send(response, 200, { data: await service.providerModels(models[1], request.signal, url.searchParams.get('refresh') === '1') })
   if (models && request.method === 'POST') return send(response, 200, await service.setProviderModels(models[1], (await readJson(request)).ids))
@@ -380,7 +389,7 @@ function keyMatches(expected, given) {
 function staticPage(pathname) {
   if (pathname === '/') return 'index.html'
   if (pathname === '/app.js' || pathname === '/icon.png' || pathname === '/bootstrap.min.css') return pathname.slice(1)
-  if (/^\/providers\/(?:antigravity|claude|codex|copilot|grok)\.png$/.test(pathname)) return pathname.slice(1)
+  if (/^\/providers\/(?:antigravity|claude|codex|copilot|grok|grokbot)\.png$/.test(pathname)) return pathname.slice(1)
   return ''
 }
 
