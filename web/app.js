@@ -18,7 +18,7 @@ const themeButton = document.querySelector('#theme')
 applyTheme(localStorage.getItem('theme') || 'light')
 themeButton.onclick = () => applyTheme(document.documentElement.dataset.bsTheme === 'dark' ? 'light' : 'dark')
 document.querySelector('#refresh').onclick = () => {
-  load({ refreshUsage: true })
+  load({ refreshUsage: true }).catch(() => undefined)
   if (document.querySelector('#tab-models').classList.contains('active')) loadCatalog(true)
 }
 const tabNav = document.querySelector('nav.tabs')
@@ -32,7 +32,6 @@ window.addEventListener('wheel', (event) => {
   event.preventDefault()
 }, { passive: false })
 window.addEventListener('hashchange', () => showTab(tabFromHash()))
-showTab(tabFromHash())
 
 function tabFromHash() {
   const name = decodeURIComponent(location.hash.slice(1))
@@ -125,7 +124,7 @@ async function load({ refreshUsage = false } = {}) {
       fillModels(card, connected[index], refreshUsage),
     ])),
   ])
-  if (document.querySelector('#tab-stats')?.classList.contains('active')) loadStats({ refresh: refreshUsage }).catch(() => undefined)
+  if (refreshUsage && document.querySelector('#tab-stats').classList.contains('active')) loadStats({ refresh: true })
 }
 
 function requestKey(request) {
@@ -352,6 +351,7 @@ function openConnect(available) {
 }
 
 let catalogRows = []
+const collapsedCatalogProviders = new Set()
 async function loadCatalog(refresh = false) {
   const target = document.querySelector('#catalog')
   const [catalog, tiers] = await Promise.all([
@@ -373,20 +373,29 @@ function renderCatalog() {
   const rows = catalogRows.filter((model) => `${model.id} ${model.name} ${model.description ?? ''}`.toLowerCase().includes(query))
   const groups = new Map()
   for (const model of rows) {
-    const name = model.provider || 'Другие'
-    groups.set(name, [...(groups.get(name) ?? []), model])
+    const id = providerOfModel(model.id)
+    if (!groups.has(id)) groups.set(id, [])
+    groups.get(id).push(model)
   }
-  const sections = [...groups].map(([name, models]) => {
-    const section = document.createElement('section')
+  const sections = [...groups].map(([id, models]) => {
+    const name = models[0].provider || 'Другие'
+    const section = document.createElement('details')
     section.className = 'card catalog-group shadow-sm'
-    section.innerHTML = `<div class="card-header fw-semibold model-with-provider">${providerMark(providerOfModel(models[0]?.id), name)}<span>${escape(name)}</span></div>`
+    section.open = Boolean(query) || !collapsedCatalogProviders.has(id)
+    section.innerHTML = `<summary class="card-header d-flex align-items-center gap-2"><strong class="model-with-provider">${providerMark(id, name)}<span>${escape(name)}</span></strong><span class="ms-auto small text-body-secondary">${escape(pluralModels(models.length))}</span></summary>`
+    if (!query) section.addEventListener('toggle', () => {
+      if (section.open) collapsedCatalogProviders.delete(id)
+      else collapsedCatalogProviders.add(id)
+    })
     const list = document.createElement('div')
     list.className = 'list-group list-group-flush'
     list.append(...models.map(catalogItem))
     section.append(list)
     return section
   })
-  document.querySelector('#catalog').replaceChildren(...sections)
+  const target = document.querySelector('#catalog')
+  if (sections.length) target.replaceChildren(...sections)
+  else target.innerHTML = '<p class="text-body-secondary">Модели не найдены</p>'
 }
 
 function providerId(value) {
@@ -483,13 +492,51 @@ async function fillModels(card, provider, refresh = false) {
   }
   const enabled = payload.data.filter((model) => model.enabled).length
   card.querySelector('[data-summary]').textContent = `${provider.accounts.length ? 'подключён' : 'не подключён'} · модели ${enabled}/${payload.data.length}`
-  target.innerHTML = `<details class="border rounded model-picker"><summary class="d-flex justify-content-between align-items-center gap-2 px-3 py-2"><strong>Доступные модели</strong><span class="text-body-secondary small">${enabled} из ${payload.data.length}</span></summary><div class="p-3 vstack gap-2"><div class="d-flex gap-2"><button type="button" class="btn btn-outline-secondary btn-sm" data-all>Все</button><button type="button" class="btn btn-outline-secondary btn-sm" data-none>Ничего</button></div><div class="model-list vstack">${payload.data.map((model) => `<label class="form-check form-switch py-2 mb-0"><input class="form-check-input" type="checkbox" role="switch" value="${escape(model.id)}" ${model.enabled ? 'checked' : ''}><span class="form-check-label"><strong class="model-with-provider">${providerMark(provider.id, provider.label)}<span>${escape(model.name || model.id)}</span></strong>${model.description ? `<small class="d-block text-body-secondary">${escape(model.description)}</small>` : ''}</span></label>`).join('')}</div><button type="button" class="btn btn-primary btn-sm" data-save-models>Сохранить модели</button></div></details>`
-  target.querySelector('[data-all]').onclick = () => target.querySelectorAll('input').forEach((input) => { input.checked = true })
-  target.querySelector('[data-none]').onclick = () => target.querySelectorAll('input').forEach((input) => { input.checked = false })
-  target.querySelector('[data-save-models]').onclick = async () => {
-    const ids = [...target.querySelectorAll('input:checked')].map((input) => input.value)
+  const rows = payload.data.map((model) => `<label class="model-option form-switch py-2"><input class="form-check-input" type="checkbox" role="switch" value="${escape(model.id)}" ${model.enabled ? 'checked' : ''}><span class="model-option-text"><strong class="model-with-provider">${providerMark(provider.id, provider.label)}<span>${escape(model.name || model.id)}</span></strong>${model.description ? `<small class="text-body-secondary">${escape(model.description)}</small>` : ''}</span></label>`)
+  target.innerHTML = `<details class="border rounded model-picker">
+    <summary class="d-flex justify-content-between align-items-center gap-2 px-3 py-2"><strong>Доступные модели</strong><span class="text-body-secondary small">${enabled} из ${payload.data.length}</span></summary>
+    <div class="p-3 vstack gap-2">
+      <input class="form-control form-control-sm" type="search" data-model-filter placeholder="Поиск по моделям" aria-label="Поиск моделей: ${escape(provider.label)}" autocomplete="off">
+      <div class="d-flex flex-wrap gap-2"><button type="button" class="btn btn-outline-secondary btn-sm" data-all>Все</button><button type="button" class="btn btn-outline-secondary btn-sm" data-none>Ничего</button></div>
+      <div class="model-list">${rows.join('')}</div>
+      <p class="text-body-secondary small mb-0" data-no-models role="status" hidden>Модели не найдены</p>
+      <button type="button" class="btn btn-primary btn-sm" data-save-models>Сохранить модели</button>
+    </div>
+  </details>`
+  const search = target.querySelector('[data-model-filter]')
+  const list = target.querySelector('.model-list')
+  const options = [...list.children].map((row, index) => {
+    const model = payload.data[index]
+    return { row, input: row.querySelector('input'), text: `${model.id} ${model.name ?? ''} ${model.description ?? ''}`.toLowerCase() }
+  })
+  const noModels = target.querySelector('[data-no-models]')
+  const all = target.querySelector('[data-all]')
+  const none = target.querySelector('[data-none]')
+  const save = target.querySelector('[data-save-models]')
+  search.oninput = () => {
+    const query = search.value.trim().toLowerCase()
+    let matches = 0
+    for (const { row, text } of options) {
+      row.hidden = !text.includes(query)
+      if (!row.hidden) matches += 1
+    }
+    list.scrollTop = 0
+    noModels.hidden = matches > 0
+    all.disabled = none.disabled = matches === 0
+    all.textContent = query ? 'Включить найденные' : 'Все'
+    none.textContent = query ? 'Выключить найденные' : 'Ничего'
+  }
+  function setVisibleModels(checked) {
+    for (const { row, input } of options) if (!row.hidden) input.checked = checked
+    save.textContent = 'Сохранить модели'
+  }
+  all.onclick = () => setVisibleModels(true)
+  none.onclick = () => setVisibleModels(false)
+  list.onchange = () => { save.textContent = 'Сохранить модели' }
+  save.onclick = async () => {
+    const ids = options.filter(({ input }) => input.checked).map(({ input }) => input.value)
     await api(`/api/providers/${provider.id}/models`, { method: 'POST', body: JSON.stringify({ ids }) })
-    target.querySelector('[data-save-models]').textContent = 'Сохранено'
+    save.textContent = 'Сохранено'
   }
 }
 
@@ -1614,6 +1661,7 @@ document.querySelector('#settings-form').onsubmit = async (event) => {
 }
 
 let statsPayload = null
+let statsRequestId = 0
 
 async function loadStats({ refresh = false } = {}) {
   const select = document.querySelector('#stats-key')
@@ -1622,26 +1670,32 @@ async function loadStats({ refresh = false } = {}) {
   if (chosen && chosen !== '*') params.set('key', chosen === '-' ? '' : chosen)
   if (refresh) params.set('refresh', '1')
   const query = params.size ? `?${params}` : ''
+  const requestId = ++statsRequestId
   const button = document.querySelector('#stats-refresh')
+  const status = document.querySelector('#stats-updated')
   button.disabled = true
-  document.querySelector('#stats-updated').textContent = refresh ? 'Обновляю статистику…' : 'Загружаю статистику…'
+  status.textContent = refresh ? 'Обновляю статистику…' : 'Загружаю статистику…'
   try {
     const stats = await api(`/api/stats${query}`)
+    if (requestId !== statsRequestId) return
     const options = ['<option value="*">Общий</option>']
     if (stats.anonymous) options.push('<option value="-">Без ключа</option>')
     for (const key of stats.keys ?? []) options.push(`<option value="${escape(key)}">${escape(key)}</option>`)
     select.innerHTML = options.join('')
     const next = [...select.options].some((option) => option.value === chosen) ? chosen : '*'
     select.value = next
-    statsPayload = stats
-    statsUpdatedAt = stats.updatedAt || Date.now()
-    document.querySelector('#stats-updated').textContent = `Последнее обновление: ${new Date(statsUpdatedAt).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}`
     renderStats(stats)
+    statsPayload = stats
+    const updatedAt = new Date(stats.updatedAt || Date.now())
+    status.textContent = `Последнее обновление: ${updatedAt.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}`
   } catch (error) {
-    document.querySelector('#stats-updated').textContent = `Не удалось обновить статистику: ${error.message}`
-    throw error
+    if (requestId !== statsRequestId) return
+    statsPayload = null
+    document.querySelector('#stats-charts').replaceChildren()
+    document.querySelector('#stats-table').replaceChildren()
+    status.textContent = `Не удалось загрузить статистику: ${error.message}`
   } finally {
-    button.disabled = false
+    if (requestId === statsRequestId) button.disabled = false
   }
 }
 
@@ -1689,14 +1743,8 @@ function cacheCellText(model) {
   return write ? `${formatTokens(read)} · зап. ${formatTokens(write)}` : formatTokens(read)
 }
 
-document.querySelector('#stats-refresh').onclick = () => loadStats({ refresh: true }).catch((error) => {
-  document.querySelector('#stats-charts').replaceChildren()
-  document.querySelector('#stats-table').textContent = error.message
-})
-document.querySelector('#stats-key').onchange = () => loadStats().catch((error) => {
-  document.querySelector('#stats-charts').replaceChildren()
-  document.querySelector('#stats-table').textContent = error.message
-})
+document.querySelector('#stats-refresh').onclick = () => loadStats({ refresh: true })
+document.querySelector('#stats-key').onchange = () => loadStats()
 document.querySelector('#stats-cache').onchange = () => {
   localStorage.setItem('stats-cache', document.querySelector('#stats-cache').value)
   if (statsPayload) renderStats(statsPayload)
@@ -1976,6 +2024,7 @@ document.addEventListener('visibilitychange', () => {
 setInterval(tickSideResets, 1000)
 setInterval(() => { if (journalWatch && !document.hidden) refreshJournal() }, 4000)
 rememberSettingsQuery()
+showTab(tabFromHash())
 load().catch((error) => {
   const status = document.querySelector('#port-status')
   if (status) status.textContent = error.message
